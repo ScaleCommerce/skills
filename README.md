@@ -35,6 +35,14 @@ Build high-converting landing pages with proven conversion psychology and layout
 
 **Use it when:** Creating landing pages, squeeze pages, lead gen pages, optimizing conversion rates, writing landing page copy, or A/B testing page elements.
 
+### code-review
+
+Thorough, opinionated code review that finds real problems — not formatting nits. Runs automated scans (duplicate detection, inconsistency checks, complexity analysis, security patterns, documentation drift) then does a manual architecture and quality review. Produces a prioritized report grouped by severity: critical issues, architecture concerns, documentation drift, code quality, and what's actually done well.
+
+**Use it when:** Reviewing a codebase, auditing code quality, finding duplicates, checking for anti-patterns, hunting tech debt, or any "take a look at my code and tell me what's wrong" request.
+
+**Works with:** All languages and frameworks.
+
 ### nano-banana
 
 Generate images using the OpenRouter API with the Nano Banana model (Gemini 2.5 Flash Image). Handles the full flow: crafting a detailed prompt from a brief description, calling the API, decoding the base64 response, saving the PNG, and displaying it — all in one step.
@@ -49,6 +57,8 @@ Add a new skill by creating a folder under `skills/` with a `SKILL.md` file:
 
 ```
 skills/
+├── code-review/
+│   └── SKILL.md
 ├── landing-page-guide/
 │   └── SKILL.md
 ├── nano-banana/
