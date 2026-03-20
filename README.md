@@ -35,6 +35,14 @@ Build high-converting landing pages with proven conversion psychology and layout
 
 **Use it when:** Creating landing pages, squeeze pages, lead gen pages, optimizing conversion rates, writing landing page copy, or A/B testing page elements.
 
+### frontend-design
+
+Anthropic's official frontend-design skill — guides the AI to create distinctive, production-grade interfaces that avoid generic "AI slop" aesthetics. Forces bold aesthetic choices (typography, color, motion, spatial composition) before writing code, so every project gets a unique visual identity instead of the same Inter-font-purple-gradient template.
+
+**Use it when:** Building any web UI — components, pages, dashboards, landing pages, or styling/beautifying existing interfaces.
+
+**Origin:** [anthropics/skills](https://github.com/anthropics/skills) (277k+ installs). Included here so the team gets it automatically.
+
 ### code-review
 
 Thorough, opinionated code review that finds real problems — not formatting nits. Runs automated scans (duplicate detection, inconsistency checks, complexity analysis, security patterns, documentation drift) then does a manual architecture and quality review. Produces a prioritized report grouped by severity: critical issues, architecture concerns, documentation drift, code quality, and what's actually done well.
@@ -58,6 +66,8 @@ Add a new skill by creating a folder under `skills/` with a `SKILL.md` file:
 ```
 skills/
 ├── code-review/
+│   └── SKILL.md
+├── frontend-design/
 │   └── SKILL.md
 ├── landing-page-guide/
 │   └── SKILL.md
