@@ -1,60 +1,102 @@
 ---
 name: nano-banana
-description: Generate images using the OpenRouter API with the Nano Banana model (Gemini 2.5 Flash Image). Use this skill whenever the user asks to generate, create, or make an image, picture, illustration, photo, or visual using OpenRouter or Nano Banana. Also trigger when the user wants AI image generation and has an OpenRouter API key available, even if they don't mention "Nano Banana" by name — any request like "make me a picture of...", "generate an image of...", or "create a visual of..." should use this skill.
+description: Generate images using the OpenRouter API with the Nano Banana model (Gemini 2.5 Flash Image). Use this skill whenever the user asks to generate, create, or make an image, picture, illustration, photo, or visual using OpenRouter or Nano Banana. Also trigger when the user wants AI image generation and has an OpenRouter API key available, even if they don't mention "Nano Banana" by name — any request like "make me a picture of...", "generate an image of...", or "create a visual of..." should use this skill. Also trigger for image editing requests like "remove the background", "change the color", "add X to this image".
 ---
 
-Generate images via the OpenRouter API using the Nano Banana model (`google/gemini-2.5-flash-image`). The API key comes from the `OPENROUTER_API_KEY` environment variable.
+Generate and edit images via the OpenRouter API using the Nano Banana model (`google/gemini-3.1-flash-image-preview`). The API key comes from the `OPENROUTER_API_KEY` environment variable.
 
-## How it works
+## CLI
 
-Send a chat completion request to OpenRouter with `response_format: {"type": "image"}`. The model returns a base64-encoded PNG in the `choices[0].message.images` array. Decode it and save to the working directory.
-
-## Step-by-step
-
-1. **Confirm the API key exists** — check that `OPENROUTER_API_KEY` is set in the environment. If missing, tell the user to set it and stop.
-
-2. **Craft the prompt** — take the user's image description and turn it into a clear, detailed prompt. Add descriptive details (style, composition, mood) if the user's request is brief, to get a better result from the model.
-
-3. **Call the API** — use `curl` to POST to `https://openrouter.ai/api/v1/chat/completions`:
+All API interactions go through the bundled CLI at `scripts/nb.py` (relative to this skill). This keeps token usage minimal — no need to craft curl commands or write inline Python. The CLI uses only stdlib (no pip install needed).
 
 ```bash
-curl -s "https://openrouter.ai/api/v1/chat/completions" \
-  -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "google/gemini-2.5-flash-image",
-    "messages": [
-      {
-        "role": "user",
-        "content": "<image prompt here>"
-      }
-    ],
-    "response_format": {"type": "image"}
-  }'
+NB="python3 <skill-path>/scripts/nb.py"
 ```
 
-4. **Extract and save the image** — parse the JSON response with Python. The image is at `choices[0].message.images[0].image_url.url` as a `data:image/png;base64,...` string. Decode and write to a file in the current working directory.
+### generate — create an image from a text prompt
 
-Use a descriptive filename based on the prompt (e.g., `giraffe_hot_sauce.png`), keeping it short and lowercase with underscores. Always use `.png` extension.
+```bash
+$NB generate "A cat wearing a top hat, distinguished and elegant" -o cat_top_hat.png
+$NB generate "Mountain sunset" -o sunset.png --aspect-ratio 16:9 --image-size 4K
+$NB generate "Logo concepts for a coffee shop" -o logo.png -n 3  # creates logo_1.png, logo_2.png, logo_3.png
+```
 
-5. **Show the image** — use the Read tool to display the saved image to the user so they can see the result immediately.
+Options:
+- `-o, --output` (required) — output PNG path
+- `-n, --count` — number of variations (default: 1). Files get `_1`, `_2` suffixes.
+- `--aspect-ratio` — `1:1` (default), `16:9`, `9:16`, `3:2`, `2:3`, `3:4`, `4:3`, `4:5`, `5:4`, `21:9`
+- `--image-size` — `1K` (default), `2K`, `4K`
 
-6. **Handle errors** — if the API returns an error (e.g., 402 insufficient credits, 429 rate limit), show the error message to the user clearly. Common issues:
+### edit — modify an existing image with a text instruction
+
+Sends the input image + prompt to the model. Use for background removal, color changes, adding/removing elements, style transfer, etc.
+
+```bash
+$NB edit "Remove the background and make it transparent" -i photo.jpg -o photo_nobg.png
+$NB edit "Change the sky to a dramatic sunset" -i landscape.png -o landscape_sunset.png
+$NB edit "Apply a watercolor painting style" -i photo.jpg -o watercolor.png
+```
+
+Options:
+- `-i, --input` (required) — input image path (any common format)
+- `-o, --output` (required) — output PNG path
+- `--aspect-ratio` / `--image-size` — same as generate
+
+### balance — check API key credits
+
+```bash
+$NB balance
+```
+
+### stats — get cost/latency for a generation
+
+```bash
+$NB stats <generation_id>
+```
+
+All commands return JSON to stdout. Errors go to stderr with non-zero exit.
+
+## Workflow
+
+1. **Craft the prompt** — take the user's description and enrich it with style, composition, and mood details. Keep it concise but vivid.
+
+2. **Pick the right command** — `generate` for new images, `edit` for modifying existing ones.
+
+3. **Choose a filename** — descriptive, lowercase, underscores, `.png` extension (e.g., `sunset_mountains.png`).
+
+4. **Set aspect ratio** when the content has a natural shape — `16:9` for landscapes/headers, `9:16` for phone wallpapers/stories, `1:1` for avatars/social, `4:3` for presentations.
+
+5. **Run the CLI** and then **show the image** with the Read tool so the user sees it immediately.
+
+6. **Handle errors**:
    - `402`: Insufficient credits — direct user to https://openrouter.ai/settings/credits
-   - `429`: Rate limited — wait a moment and retry once
-   - Other errors: show the raw error message
+   - `429`: Rate limited — wait briefly and retry once
 
-## Example
+## Examples
 
+**Generate:**
 User: "make an image of a cat wearing a top hat"
 
-→ Prompt sent: "Generate an image of a cat wearing a top hat. The cat should look distinguished and elegant, with a sleek black top hat perched on its head."
-→ Saved as: `cat_top_hat.png`
-→ Display the image to the user with the Read tool
+```bash
+$NB generate "A distinguished cat wearing a sleek black top hat, elegant portrait style, soft studio lighting" -o cat_top_hat.png
+```
 
-## Important notes
+**Edit:**
+User: "can you make the background blurry in this photo?" (user has `portrait.jpg`)
 
-- Always use `google/gemini-2.5-flash-image` — this is the Nano Banana model. Never substitute a different model.
-- Always include `"response_format": {"type": "image"}` — without this, the model returns text instead of an image.
-- The Python extraction script should handle the full response parsing and base64 decoding in one step for reliability.
-- One image per request. If the user wants multiple images, run multiple requests sequentially.
+```bash
+$NB edit "Blur the background with a shallow depth-of-field bokeh effect, keep the subject sharp" -i portrait.jpg -o portrait_blurred.png
+```
+
+**Variations:**
+User: "give me a few options for a hero image for my coffee shop landing page"
+
+```bash
+$NB generate "Warm inviting coffee shop interior, morning light streaming through windows, artisan coffee cups on wooden counter" -o hero.png -n 3 --aspect-ratio 16:9 --image-size 4K
+```
+
+## Notes
+
+- One image per API call. `-n 3` makes 3 sequential calls.
+- The `edit` command accepts any common image format as input (PNG, JPG, WebP, etc.) but always outputs PNG.
+- The CLI handles all base64 encoding/decoding, error parsing, and file writing internally.

@@ -53,9 +53,9 @@ Thorough, opinionated code review that finds real problems — not formatting ni
 
 ### nano-banana
 
-Generate images using the OpenRouter API with the Nano Banana model (Gemini 2.5 Flash Image). Handles the full flow: crafting a detailed prompt from a brief description, calling the API, decoding the base64 response, saving the PNG, and displaying it — all in one step.
+Generate and edit images using the OpenRouter API with the Nano Banana model (Gemini 3.1 Flash Image). Includes a Python CLI (`scripts/nb.py`) that handles the full flow — prompt enrichment, API calls, base64 decoding, and file output — in a single command. Supports text-to-image generation, image editing (background removal, style transfer, element changes), batch variations, aspect ratios, and resolution control.
 
-**Use it when:** You need AI-generated images — product mockups, hero visuals, illustrations, or any "make me a picture of..." request.
+**Use it when:** You need AI-generated images — product mockups, hero visuals, illustrations, image editing, or any "make me a picture of..." / "edit this image..." request.
 
 **Requires:** `OPENROUTER_API_KEY` environment variable.
 
@@ -66,13 +66,15 @@ Add a new skill by creating a folder under `skills/` with a `SKILL.md` file:
 ```
 skills/
 ├── code-review/
-│   └── SKILL.md
+│   ├── SKILL.md
+│   └── scripts/        # Automated analysis tools
 ├── frontend-design/
 │   └── SKILL.md
 ├── landing-page-guide/
 │   └── SKILL.md
 ├── nano-banana/
-│   └── SKILL.md
+│   ├── SKILL.md
+│   └── scripts/        # CLI wrapper (nb.py)
 └── your-new-skill/
     └── SKILL.md
 ```

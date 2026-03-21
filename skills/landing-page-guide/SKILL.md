@@ -1,15 +1,6 @@
 ---
 name: landing-page-guide
 description: Build high-converting landing pages with proven conversion psychology and layout patterns (9% → 20%+ conversion rates). Use this skill whenever the user wants to create, build, or optimize a landing page, lead generation page, squeeze page, opt-in page, or any single-page conversion-focused experience. Also trigger when the user asks about landing page copywriting (headlines, CTAs, benefit statements), conversion rate optimization for a landing page, A/B testing landing page elements, landing page layout or structure advice, or improving an existing page's conversion rate. Covers the full workflow from strategy to code (Nuxt4 + NuxtUI) to deployment, including AI-generated visuals via OpenRouter. Even if the user doesn't say "landing page" explicitly — if they're describing a page whose primary goal is capturing leads, driving signups, or getting a single conversion action, this skill applies.
-tags:
-  - landing-pages
-  - conversion-optimization
-  - nuxt
-  - nuxtui
-  - ai-assisted-development
-  - lead-generation
-  - sales-funnels
-version: 3.0
 ---
 
 # Landing Page Guide - Nuxt Edition (v3.0)
@@ -298,44 +289,16 @@ Pipeline: Code → GitHub → Vercel → Live site
 - Run Lighthouse audit: target 90+ Performance score
 - Iterate based on visual feedback + analytics
 
-#### Visual & Image Generation (Gemini 3.1 Flash + OpenRouter)
+#### Visual & Image Generation
 
-For landing page visuals (hero images, benefit graphics, mockups):
+For landing page visuals (hero images, benefit graphics, mockups), use the **nano-banana** skill which provides a CLI for image generation via OpenRouter.
 
-**Primary**: Use **Gemini 3.1 Flash Image Preview** model
-- Fast, high-quality image generation
-- Excellent for visual iteration
-
-**Setup**:
-1. Check for environment variable: `OPENROUTER_API_KEY`
-2. **If set**: Use OpenRouter (unified API supporting Gemini, Midjourney, DALL-E)
-   ```javascript
-   const imageResponse = await fetch("https://openrouter.ai/api/v1/images/generations", {
-     method: "POST",
-     headers: {
-       "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
-       "Content-Type": "application/json"
-     },
-     body: JSON.stringify({
-       model: "google/gemini-3.1-flash-image-preview",
-       prompt: "Your detailed image prompt",
-       width: 1600,
-       height: 900
-     })
-   });
-   ```
-3. **If not set**: Fall back to alternative image generation APIs (Unsplash API, stock photos, or manual generation)
-
-**Prompting Visuals**:
-```
-"Generate a landing page hero image:
-- Show [description: person using product, result transformation]
-- Style: [brand style - minimalist/bold/organic]
-- Color palette: [primary: #color, secondary: #color]
-- Aspect ratio: 16:9
-- Real-world context, customer perspective (not product focus)
-- No text in image (we'll overlay text in code)"
-```
+Prompting tips for landing page visuals:
+- Describe the scene from the customer's perspective (person using product, transformation result)
+- Specify brand style and color palette
+- Use 16:9 aspect ratio for hero images
+- Request "no text in image" — overlay text in code instead
+- Include real-world context, not generic stock photo aesthetics
 
 ### Key Prompting Rules
 
