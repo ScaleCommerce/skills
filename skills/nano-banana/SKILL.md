@@ -1,6 +1,6 @@
 ---
 name: nano-banana
-description: Generate images using the OpenRouter API with the Nano Banana model (Gemini 2.5 Flash Image). Use this skill whenever the user asks to generate, create, or make an image, picture, illustration, photo, or visual using OpenRouter or Nano Banana. Also trigger when the user wants AI image generation and has an OpenRouter API key available, even if they don't mention "Nano Banana" by name — any request like "make me a picture of...", "generate an image of...", or "create a visual of..." should use this skill. Also trigger for image editing requests like "remove the background", "change the color", "add X to this image".
+description: Generate images using the OpenRouter API with the Nano Banana model (Gemini 3.1 Flash Image). Use this skill whenever the user asks to generate, create, or make an image, picture, illustration, photo, or visual using OpenRouter or Nano Banana. Also trigger when the user wants AI image generation and has an OpenRouter API key available, even if they don't mention "Nano Banana" by name — any request like "make me a picture of...", "generate an image of...", or "create a visual of..." should use this skill. Also trigger for image editing requests like "remove the background", "change the color", "add X to this image".
 ---
 
 Generate and edit images via the OpenRouter API using the Nano Banana model (`google/gemini-3.1-flash-image-preview`). The API key comes from the `OPENROUTER_API_KEY` environment variable.
