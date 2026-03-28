@@ -70,6 +70,10 @@ npx skills check
 npx skills update
 ```
 
+## Updating Skills
+
+When asked to update or improve a skill, always edit the local SKILL.md in this repo — this is the development version. Users will later install it via `npx skills add scalecommerce/skills`. Use the `/skill-creator` skill for creating, modifying, and testing skills.
+
 ## Conventions
 
 - Skills are self-contained: one folder with a `SKILL.md` file, plus optional `scripts/` for bundled CLIs/tools.
