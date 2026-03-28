@@ -17,9 +17,11 @@ skills/
 │   └── SKILL.md                — UI design (from anthropics/skills)
 ├── landing-page-guide/
 │   └── SKILL.md                — Conversion-focused landing pages (Nuxt4 + NuxtUI)
-└── nano-banana/
-    ├── SKILL.md                — Image generation & editing via OpenRouter API
-    └── scripts/nb.py           — CLI: generate, edit, balance, stats
+├── nano-banana/
+│   ├── SKILL.md                — Image generation & editing via OpenRouter API
+│   └── scripts/nb.py           — CLI: generate, edit, balance, stats
+└── update-claude-md/
+    └── SKILL.md                — Structured CLAUDE.md creation & maintenance
 ```
 
 Each skill is a single `SKILL.md` file with YAML frontmatter (`name`, `description`) followed by markdown instructions.

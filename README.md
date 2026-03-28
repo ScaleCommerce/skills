@@ -59,6 +59,12 @@ Generate and edit images using the OpenRouter API with the Nano Banana model (Ge
 
 **Requires:** `OPENROUTER_API_KEY` environment variable.
 
+### update-claude-md
+
+Keep CLAUDE.md files useful, lean, and current. Guides the AI through a structured update process — assess the current file, explore the codebase, then draft or revise with a focus on tribal knowledge (architecture decisions, conventions, gotchas) rather than code-level details agents can discover themselves. Includes a self-enforcing "About This File" section that prevents bloat during future updates.
+
+**Use it when:** Creating, updating, or improving CLAUDE.md files, syncing project context for AI agents, or after a significant refactor when the project docs need refreshing.
+
 ## Contributing
 
 Add a new skill by creating a folder under `skills/` with a `SKILL.md` file:
@@ -75,6 +81,8 @@ skills/
 ├── nano-banana/
 │   ├── SKILL.md
 │   └── scripts/        # CLI wrapper (nb.py)
+├── update-claude-md/
+│   └── SKILL.md
 └── your-new-skill/
     └── SKILL.md
 ```
