@@ -57,7 +57,10 @@ CLAUDE.md is a last resort, not a first step. When agents misbehave, work throug
 
 ## What Belongs in CLAUDE.md
 
-### Include (only if agents can't discover it themselves)
+The most valuable CLAUDE.md content is knowledge that exists only in developers' heads — the gap
+between "what code can tell you" and "what successful team members know."
+
+### Categories of Invisible Knowledge
 
 - **Behavioral corrections**: Things the agent consistently gets wrong despite having access to
   the code. "Always use `pnpm`, never `npm`" — only if the agent keeps reaching for npm.
@@ -65,31 +68,41 @@ CLAUDE.md is a last resort, not a first step. When agents misbehave, work throug
   the common default. The "why" isn't in the code.
 - **Conventions that break expectations**: Patterns that differ from framework defaults. An agent
   reading a Nuxt project assumes Nuxt conventions — document where you diverge.
-- **Gotchas that have burned the team**: Migration quirks, env var requirements, order-of-
-  operations traps, silent failure modes. Things with no code-level signal.
+- **External service quirks**: API behaviors that aren't obvious from the SDK. "Stripe webhook
+  needs raw body, not parsed JSON." "The geocoding API returns 200 with an error field instead
+  of 4xx." "Rate limited to 100 req/min — we batch calls."
+- **Deployment constraints**: Platform limits that shape code decisions. "Vercel serverless
+  times out at 60s." "Edge functions can't use Node fs." "Always test with `--turbo` locally
+  because CI uses Turborepo."
+- **Business domain context**: What the app does in human terms. Domain-specific terminology
+  ("a 'folio' is a customer's portfolio"), business rules not enforced in code ("users can only
+  have one active subscription"), state transitions ("orders go pending → paid → shipped, never
+  backwards").
+- **Cross-service dependencies**: "This service consumes events from the billing service." "The
+  mobile app expects API v1 to remain stable." Things that break other systems if changed.
+- **Security boundaries and trust assumptions**: "User input is sanitized in API middleware —
+  downstream code assumes clean data." "Never store PII outside the users table." "Auth tokens
+  use RS256, not HS256."
+- **Environment quirks**: "CI runs Ubuntu but local dev is macOS — path case sensitivity differs."
+  "Test DB is on port 5433, not 5432." "Redis in staging is Upstash REST, not a socket."
+- **Gotchas that have burned the team**: Migration quirks, order-of-operations traps, silent
+  failure modes. Things with no code-level signal.
 - **Non-obvious commands**: Only commands the agent wouldn't find in package.json/Makefile/etc.
-  `npm run dev` is obvious. `npm run dev:ssl -- --local-certs` is not.
-- **Cross-cutting concerns**: Auth patterns, error handling strategy, logging conventions — things
-  that affect many files but live in none.
-- **Workflow rules**: Branch naming, PR process, deployment steps — but only team-specific ones.
 - **Pointers to deeper docs**: "Read `docs/api-design.md` before touching the API layer" — not
   the docs themselves, just when to read them.
 
-### Exclude (agents discover these on their own)
+### What to Exclude (agents discover these on their own)
 
 - **File listings and directory trees**: Agents run `ls`, `find`, and glob. They explore fast.
 - **Detailed tech stack descriptions**: A brief stack line (e.g., "Nuxt 4 + NuxtUI + Convex") is
-  fine — it helps agents pick the right docs and conventions fast. But don't list every dependency
-  or explain what each one does.
+  fine — it helps agents pick the right docs and conventions fast. But don't list every dependency.
 - **Prop/API documentation**: Agents read source code and type definitions directly.
 - **Code style rules**: If enforced by linters (ESLint/Prettier/Biome), don't duplicate in prose.
-  Never send an agent to do a linter's job.
 - **Standard language idioms**: Agents already know Python/JS/Go conventions.
 - **Implementation details**: If it's in the code, it's in the code.
 - **Frequently changing info**: Git log and blame are authoritative.
 - **Generic advice**: "Write clean code", "add tests" — agents already try to do this.
 - **Anything produced by `/init`**: Auto-generated CLAUDE.md files are almost always noise.
-  They contain things the model already found in order to write the file.
 
 ## Update Process
 
@@ -104,24 +117,52 @@ If a CLAUDE.md exists, audit it ruthlessly:
 | **Bias risk** | Does it mention legacy tech or deprecated patterns that might mislead? |
 | **Conciseness** | Is there anything verbose, obvious, or duplicated from tooling? |
 | **Actionability** | Are instructions specific enough to follow without guessing? |
-
-**The nuclear audit**: Delete the entire file, run the agent on a real task, and see what it
-struggles with. What it handles fine on its own didn't need to be there. What it gets wrong is
-what your CLAUDE.md should address. This is the most reliable way to figure out what actually
-belongs.
+| **Completeness** | Is invisible knowledge missing? (see step 3 below) |
 
 ### 2. Gather Context
 
-Explore the codebase to understand its current state — but remember, you're gathering context
-to identify what the agent would NOT easily discover, not to summarize what's there:
+Explore the codebase to understand what's already discoverable (so you don't duplicate it):
 
-- Read config files (package.json, tsconfig, etc.) to understand what's already discoverable
+- Read config files (package.json, tsconfig, etc.) — this is what agents will find on their own
 - Check CI/CD config, linter config, test setup — these are self-documenting
 - Read recent commit messages for active work patterns and team conventions
-- Look for existing gotchas, workarounds, or non-obvious patterns in the code
 - Check for nested CLAUDE.md files that might need updating too
 
-### 3. Draft or Revise
+### 3. Hunt for Missing Knowledge
+
+This is the critical step most CLAUDE.md updates miss. Don't just audit what's there — actively
+investigate what's NOT there but should be.
+
+**Mine the codebase for signals:**
+
+- **Git hotspots**: Run `git log --oneline -50` and look for files fixed repeatedly — these
+  often signal gotchas worth documenting.
+- **TODO/FIXME/HACK comments**: These are developers flagging pain points. Scan for them and
+  evaluate whether they reveal gotchas an agent should know about.
+- **CI config**: Look for non-obvious steps — custom scripts, environment setup, platform-specific
+  workarounds. These often reveal deployment constraints.
+- **Dockerfile / deployment configs**: Platform constraints (memory limits, timeouts, OS
+  differences) that shape what code is valid.
+- **.env.example**: Variables with unclear purposes or non-obvious requirements.
+- **Error handling patterns**: Are errors handled consistently? Is there a project-wide strategy
+  (Result types, error boundaries, Sentry integration) that new code should follow?
+
+**Ask the developer targeted questions:**
+
+Don't just silently write the file. Prompt the user to surface head-knowledge with specific
+questions like:
+
+- "Are there external services with undocumented quirks or rate limits I should note?"
+- "Any deployment platform constraints (timeouts, memory limits, OS differences)?"
+- "Domain terms or business rules that aren't obvious from the code?"
+- "Areas of the codebase that are particularly fragile or surprising to work in?"
+- "Team workflow rules — branching strategy, review requirements, deploy process?"
+- "Known gotchas that have tripped people up before?"
+
+Skip questions where you already found the answer in the code. Focus on the gaps. Not every
+project needs all of these — use judgment based on what you found in steps 1-2.
+
+### 4. Draft or Revise
 
 **Target length**: 30-100 lines. Under 150 is acceptable for complex projects. Over 150 means
 you're almost certainly including things agents can infer. Many simple projects need only 20-30
@@ -155,7 +196,11 @@ When updating, ask for each line: "Would removing this cause an agent to make a 
 The "About This File" section is a self-enforcing guard. It reminds both humans and future
 agents to keep the file lean during updates. Always include it.
 
-### 4. Validate
+Not every project needs every section. A simple project might only have Overview + Conventions.
+A complex one might add sections for domain context, deployment constraints, or security
+boundaries — but only if that knowledge is genuinely invisible from the code.
+
+### 5. Validate
 
 Before finalizing:
 
@@ -166,6 +211,8 @@ Before finalizing:
   make the preferred approach prominent and leave the legacy stuff unmentioned.
 - **The staleness test**: Will this line become wrong when someone changes the code without
   updating CLAUDE.md? If it's likely to go stale, it probably belongs in the code instead.
+- **The gap test**: Review the "Categories of Invisible Knowledge" above. Is there important
+  head-knowledge in any of those categories that you haven't captured?
 - **The length test**: If over 100 lines, seriously reconsider what's earning its keep.
 
 ## Progressive Disclosure
@@ -191,6 +238,9 @@ project/
   read your summary. And your summary will go stale.
 - **Running `/init` and shipping it**: Auto-generated files contain exactly what the agent already
   found. By definition, this is the least useful information you could include.
+- **Only auditing, never adding**: A CLAUDE.md that's been pruned to perfection but is missing
+  critical domain knowledge or deployment constraints is still failing. Pruning and discovering
+  are both essential.
 - **Mentioning things to avoid them**: "Don't use the old auth middleware" makes the agent think
   about the old auth middleware. Just don't mention it. Make the new one easy to find.
 - **Adding back what you pruned**: If you removed file listings, don't re-add them as
@@ -201,3 +251,13 @@ project/
 - **Never updating it**: A stale CLAUDE.md is worse than no CLAUDE.md. Models will confidently
   follow outdated instructions, placing files in wrong locations, using deprecated patterns,
   and referencing things that no longer exist.
+
+## Maintenance
+
+With every model release, try deleting sections and see if the agent still performs well.
+Models keep getting better at codebase exploration — what needed documenting 6 months ago
+might be redundant today. The best CLAUDE.md files shrink over time.
+
+When you notice an agent struggling with something, don't immediately add it to CLAUDE.md.
+First ask: can I fix the codebase so the agent wouldn't struggle? Better tests, clearer
+structure, improved naming? Only reach for CLAUDE.md when the structural fix isn't feasible.
