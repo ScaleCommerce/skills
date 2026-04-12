@@ -24,7 +24,7 @@ Perform a thorough, opinionated code review of a project or set of files. The go
 Before reviewing anything, get the lay of the land:
 
 ```bash
-# Project structure (2 levels deep)
+# Project structure (first 100 files, excluding build artifacts)
 find . -type f -not -path '*/node_modules/*' -not -path '*/.git/*' -not -path '*/vendor/*' -not -path '*/.nuxt/*' -not -path '*/.next/*' -not -path '*/dist/*' -not -path '*/__pycache__/*' -not -path '*/.venv/*' | head -100
 
 # Package/dependency info
@@ -136,7 +136,7 @@ python3 <skill-path>/scripts/check_docs.py
 
 ### Step 3: Deep Security Review (Agent-Driven)
 
-This is where you earn your keep. The scripts found pattern matches — now you read the actual code and think like an attacker. The most dangerous vulnerabilities are the ones no regex can catch: logic flaws, missing authorization checks on specific routes, race conditions between concurrent operations, or data flowing from user input through three function calls before hitting an unsafe sink.
+This is where you earn your keep. Whether the scripts surfaced candidates or you read the code directly (for smaller projects), now you think like an attacker. The most dangerous vulnerabilities are the ones no regex can catch: logic flaws, missing authorization checks on specific routes, race conditions between concurrent operations, or data flowing from user input through three function calls before hitting an unsafe sink.
 
 For each area below, **read the relevant source files** and trace how data moves through the system. Don't just grep — follow the code paths.
 
@@ -165,7 +165,7 @@ For each area below, **read the relevant source files** and trace how data moves
 
 ### Step 4: Deep Quality Review (Agent-Driven)
 
-Read the actual source files — start with the ones flagged by the scans, but don't stop there. The scripts only know about patterns they were programmed to find. You understand code semantics: you can spot a function that claims to validate input but actually doesn't, a "cache" that grows forever, or an API that returns unbounded result sets. Focus on:
+Read the actual source files — if scripts were run, start with the flagged locations, but don't stop there. Scripts only know about patterns they were programmed to find. You understand code semantics: you can spot a function that claims to validate input but actually doesn't, a "cache" that grows forever, or an API that returns unbounded result sets. Focus on:
 
 #### Documentation Truthfulness
 - Does the README describe the project as it actually is, or as someone wished it was 6 months ago?
@@ -181,6 +181,38 @@ Read the actual source files — start with the ones flagged by the scans, but d
 - Is the project structure predictable — could a new dev find things without a guide?
 - Are there god files/classes that do too many things?
 - Are there exported functions/components that nothing imports? (dead code at module boundaries)
+
+#### Framework Opportunity Analysis
+
+Sometimes the best refactoring isn't fixing the code — it's recognizing that the code shouldn't exist at all. Look for cases where the project is hand-building infrastructure that a well-established framework already provides, maintained by a large community, with battle-tested security, documentation, and ecosystem.
+
+This is **advisory, not prescriptive**. Migrating to a framework is a major decision with real tradeoffs (learning curve, vendor lock-in, migration cost). Only flag this when the benefit is clear and substantial — when the project is spending significant effort maintaining plumbing that a framework would handle out of the box.
+
+**Signals that a framework could help:**
+- Custom HTTP routing, middleware chains, and request/response handling that a framework provides natively
+- Separate frontend and backend servers (or repos) when a full-stack framework could unify them — reducing deployment complexity, eliminating API boilerplate, and sharing types/validation
+- Hand-rolled authentication, session management, CSRF protection, or form validation that frameworks ship as built-in modules
+- Custom ORM layers, query builders, or migration scripts when framework-integrated database tooling exists
+- Manual build pipelines, hot-reload setups, or SSR implementations that a framework handles by convention
+- Significant boilerplate for concerns like caching, job queues, or file uploads that are one-line configurations in established frameworks
+
+**Common framework opportunities by ecosystem:**
+
+| Ecosystem | What It Looks Like Without a Framework | Framework Alternative |
+|-----------|--------------------|-----------------------|
+| **Node.js** | Thin server (Express/Vite/Fastify) with hand-rolled routing, auth, SSR, and a separate SPA | **Nuxt** (Vue) or **Next.js** (React) — unified full-stack with SSR, API routes, auto-imports, and file-based routing |
+| **PHP** | Plain PHP or slim router with manual DB queries, hand-rolled auth, custom templating | **Laravel** (rapid development, Eloquent ORM, Blade) or **Symfony** (enterprise, Doctrine, Twig) |
+| **Python** | Custom HTTP server, manual request parsing, hand-rolled validation | **FastAPI** (async APIs, auto-validation, OpenAPI docs) or **Django** (full-stack, ORM, admin panel) |
+| **Go** | net/http with custom router, manual middleware, hand-rolled JSON handling | **Gin** or **Echo** (structured routing, middleware, binding/validation) |
+| **Ruby** | Sinatra with growing middleware stack, custom ORM layer | **Rails** (when the project outgrows Sinatra's simplicity) |
+
+**When NOT to flag this:**
+- The project intentionally avoids frameworks for valid reasons (minimal dependencies, embedded systems, learning exercises, microservices that genuinely need to be lightweight)
+- The migration cost would outweigh the benefit (mature codebase with years of battle-tested custom code)
+- The custom solution does something genuinely specialized that frameworks don't cover
+- The project is a library or SDK (frameworks are for applications)
+
+When you identify a framework opportunity, frame it as a strategic suggestion with honest tradeoffs — not as a criticism of the existing code. Estimate the rough scope of what the framework would replace (e.g., "~15 files handling routing, auth, and SSR could be replaced by Nuxt's built-in equivalents") so the developer can weigh the migration cost. If the security review (Step 3) found vulnerabilities in hand-rolled infrastructure (auth, sessions, CSRF), reference those findings — they strengthen the case for a framework where these are battle-tested defaults.
 
 #### Error Handling
 - Are errors caught and handled meaningfully, or swallowed?
@@ -257,7 +289,7 @@ Structure the report by severity, not by file. Group related issues together.
 [Injection risks, auth gaps, secret exposure, supply chain issues. Grouped by OWASP category where applicable. Include severity (Critical/High/Medium) for each finding.]
 
 ## Architecture Concerns
-[Structural problems that will get worse over time. Refactoring candidates.]
+[Structural problems that will get worse over time. Refactoring candidates. If framework opportunities were identified, include them here with the heading "Framework Opportunity" — state what custom code it would replace, which framework and why, the estimated scope of change, and honest tradeoffs.]
 
 ## Documentation Drift
 [Mismatches between README/CLAUDE.md and actual code. Dead instructions, phantom files, outdated setup steps. This section matters because wrong docs are worse than no docs — they actively mislead.]
