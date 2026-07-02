@@ -37,11 +37,11 @@ Build high-converting landing pages with proven conversion psychology and layout
 
 ### frontend-design
 
-Anthropic's official frontend-design skill — guides the AI to create distinctive, production-grade interfaces that avoid generic "AI slop" aesthetics. Forces bold aesthetic choices (typography, color, motion, spatial composition) before writing code, so every project gets a unique visual identity instead of the same Inter-font-purple-gradient template.
+Anthropic's official frontend-design skill, extended with additional best practices — guides the AI to create distinctive, production-grade interfaces that avoid generic "AI slop" aesthetics. Works in two passes: first a compact design plan (palette, type roles, layout, one signature element), self-critiqued against known AI-default looks, then implementation with a quality floor (responsive, keyboard focus, reduced motion). Includes UX-writing guidance so the copy doesn't give the page away either.
 
 **Use it when:** Building any web UI — components, pages, dashboards, landing pages, or styling/beautifying existing interfaces.
 
-**Origin:** [anthropics/skills](https://github.com/anthropics/skills) (277k+ installs). Included here so the team gets it automatically.
+**Origin:** [anthropics/claude-code frontend-design plugin](https://github.com/anthropics/claude-code/tree/main/plugins/frontend-design), merged with our additions (component-vocabulary consistency, Tailwind palette replacement, banned AI-copy register). Included here so the team gets it automatically.
 
 ### code-review
 
