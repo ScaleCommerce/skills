@@ -1,76 +1,98 @@
 #!/usr/bin/env python3
-"""Detect naming convention inconsistencies, leftover debug statements, and code smells."""
-import os, re, sys
+"""Detect leftover debug statements, empty error handlers, and style inconsistencies.
+
+Findings are sorted by severity before the output cap is applied, so a codebase
+full of TODOs can't drown an empty catch block. TODO/FIXME comments are reported
+as a per-file summary — their exact locations are cheap to grep once you care.
+"""
+import os
+import re
+import sys
 from collections import Counter
 
-root = sys.argv[1] if len(sys.argv) > 1 else '.'
-issues = []
+from common import iter_source_files, read_text
 
-for dirpath, _, filenames in os.walk(root):
-    skip = ['node_modules', '.git', 'vendor', 'dist', '__pycache__', '.venv', '.nuxt', '.next']
-    if any(s in dirpath for s in skip):
-        continue
-    for fname in filenames:
-        if not any(fname.endswith(e) for e in ['.ts', '.tsx', '.js', '.jsx', '.vue', '.py', '.go', '.php']):
-            continue
-        fpath = os.path.join(dirpath, fname)
-        try:
-            with open(fpath, 'r', errors='ignore') as f:
-                content = f.read()
-                lines = content.split('\n')
-        except:
-            continue
+SOURCE_EXTS = ['.ts', '.tsx', '.js', '.jsx', '.vue', '.py', '.go', '.php']
+JS_EXTS = ('.ts', '.tsx', '.js', '.jsx')
 
-        # Check: mixed import styles (JS/TS)
-        if fname.endswith(('.ts', '.tsx', '.js', '.jsx')):
-            has_require = bool(re.search(r'\brequire\s*\(', content))
+# Directories where print()/console.log are legitimate output, not leftovers.
+CLI_HINT = re.compile(r'(^|/)(scripts?|bin|cli|tools?|examples?|tests?|__tests__)(/|$)')
+
+MAX_ISSUES = 50
+
+
+def main():
+    root = sys.argv[1] if len(sys.argv) > 1 else '.'
+    high, medium, low = [], [], []
+    todo_counts = Counter()
+
+    for fpath in iter_source_files(root, SOURCE_EXTS):
+        content = read_text(fpath)
+        if content is None:
+            continue
+        lines = content.split('\n')
+        is_js = fpath.endswith(JS_EXTS) or fpath.endswith('.vue')
+
+        # Empty catch blocks (JS/TS), including optional binding `catch {}`.
+        # Regex runs on the whole file so multi-line `catch (e) {\n}` is caught;
+        # line number is recovered from the match offset.
+        if is_js:
+            for m in re.finditer(r'catch\s*(\([^)]*\))?\s*\{\s*\}', content):
+                line_no = content[:m.start()].count('\n') + 1
+                high.append(f"Empty catch block (error swallowed): {fpath}:{line_no}")
+
+        # Bare except: pass (Python)
+        if fpath.endswith('.py'):
+            for i, line in enumerate(lines):
+                if re.match(r'\s*except\b.*:', line) and i + 1 < len(lines):
+                    body = lines[i + 1].split('#')[0].strip()
+                    if body in ('pass', '...'):
+                        high.append(f"Empty except (error swallowed): {fpath}:{i+1}")
+
+        # Leftover debug statements — skipped in CLI/script/test paths where
+        # printing is the point.
+        if not CLI_HINT.search(fpath.replace(os.sep, '/')):
+            if is_js:
+                for i, line in enumerate(lines):
+                    stripped = line.strip()
+                    if re.match(r'console\.(log|debug)\(', stripped):
+                        medium.append(f"console.log left in: {fpath}:{i+1}")
+            if fpath.endswith('.py'):
+                # print() in a file with a main entry point is CLI output, not debug.
+                if '__main__' not in content:
+                    for i, line in enumerate(lines):
+                        if re.match(r'print\(', line.strip()):
+                            medium.append(f"print() left in: {fpath}:{i+1}")
+
+        # Mixed module systems (JS/TS): only count real CJS require assignments,
+        # not the word "require" in strings or comments.
+        if fpath.endswith(JS_EXTS):
+            has_require = bool(re.search(
+                r'^\s*(?:const|let|var)\s+.+=\s*require\s*\(', content, re.MULTILINE))
             has_import = bool(re.search(r'^import\s', content, re.MULTILINE))
             if has_require and has_import:
-                issues.append(f"Mixed require/import: {fpath}")
+                low.append(f"Mixed require/import: {fpath}")
 
-        # Check: inconsistent string quotes (JS/TS)
-        if fname.endswith(('.ts', '.tsx', '.js', '.jsx')):
-            singles = len(re.findall(r"(?<!=)'[^']*'", content))
-            doubles = len(re.findall(r'(?<!=)"[^"]*"', content))
-            if singles > 5 and doubles > 5:
-                ratio = min(singles, doubles) / max(singles, doubles)
-                if ratio > 0.3:  # More than 30% mix
-                    issues.append(f"Mixed quote styles ({singles} single, {doubles} double): {fpath}")
+        # TODO/FIXME/HACK — summarized, not itemized.
+        n = len(re.findall(r'(?://|#|<!--|\*)\s*(?:TODO|FIXME|HACK|XXX)\b', content))
+        if n:
+            todo_counts[fpath] = n
 
-        # Check: console.log / print statements left in
-        if fname.endswith(('.ts', '.tsx', '.js', '.jsx', '.vue')):
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped.startswith('console.log(') and not stripped.startswith('//'):
-                    issues.append(f"console.log left in: {fpath}:{i+1}")
-        if fname.endswith('.py'):
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                if stripped.startswith('print(') and not stripped.startswith('#'):
-                    issues.append(f"print() left in: {fpath}:{i+1}")
+    issues = high + medium + low
+    for issue in issues[:MAX_ISSUES]:
+        print(issue)
+    if len(issues) > MAX_ISSUES:
+        print(f"... ({len(issues) - MAX_ISSUES} more, truncated lowest-severity-first)")
 
-        # Check: TODO/FIXME/HACK/XXX comments
-        for i, line in enumerate(lines):
-            if re.search(r'\b(TODO|FIXME|HACK|XXX)\b', line):
-                issues.append(f"{re.search(r'(TODO|FIXME|HACK|XXX)', line).group()}: {fpath}:{i+1} — {line.strip()[:80]}")
+    if todo_counts:
+        total = sum(todo_counts.values())
+        print(f"\nTODO/FIXME/HACK comments: {total} across {len(todo_counts)} files")
+        for fpath, n in todo_counts.most_common(10):
+            print(f"  {n:3d}  {fpath}")
 
-        # Check: empty catch/except blocks
-        if fname.endswith(('.ts', '.tsx', '.js', '.jsx')):
-            for i, line in enumerate(lines):
-                if re.search(r'catch\s*\([^)]*\)\s*\{\s*\}', content):
-                    issues.append(f"Empty catch block: {fpath}")
-                    break
-        if fname.endswith('.py'):
-            for i, line in enumerate(lines):
-                if 'except' in line and i + 1 < len(lines):
-                    next_line = lines[i + 1].strip()
-                    if next_line == 'pass' or next_line == '...':
-                        issues.append(f"Empty except/pass: {fpath}:{i+1}")
+    if not issues and not todo_counts:
+        print("No major inconsistencies detected.")
 
-for issue in issues[:50]:
-    print(issue)
 
-if not issues:
-    print("No major inconsistencies detected.")
-else:
-    print(f"\n({len(issues)} issues total)")
+if __name__ == '__main__':
+    main()

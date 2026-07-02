@@ -2,6 +2,11 @@
 """
 Comprehensive security scanner: secrets, injection patterns, access control, insecure APIs.
 Covers OWASP Top 10 2025, CWE/SANS Top 25, and common vulnerability patterns.
+
+Precision matters more than recall here: every false positive the reviewing
+agent has to dismiss erodes trust in the real findings. Structured token
+patterns are case-sensitive, placeholder detection looks at the matched line
+(not a broad context window), and .env findings consult .gitignore.
 """
 import os
 import re
@@ -9,13 +14,11 @@ import sys
 import math
 from collections import defaultdict
 
+from common import iter_source_files, read_text, is_ignored_by_git
+
 root = sys.argv[1] if len(sys.argv) > 1 else "."
 issues = []  # (severity, category, message)
 
-SKIP_DIRS = {
-    "node_modules", ".git", "vendor", "dist", "__pycache__", ".venv",
-    ".nuxt", ".next", ".output", "build", "coverage", ".tox", "venv",
-}
 SOURCE_EXTS = {
     ".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte",
     ".py", ".go", ".php", ".rb", ".java", ".rs", ".cs",
@@ -24,28 +27,13 @@ CONFIG_EXTS = {".env", ".yaml", ".yml", ".json", ".toml", ".xml", ".ini", ".cfg"
 ALL_EXTS = SOURCE_EXTS | CONFIG_EXTS
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 def walk_files(extensions=None):
     """Yield (filepath, content, lines) for matching files."""
-    exts = extensions or ALL_EXTS
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if not any(fname.endswith(e) for e in exts):
-                continue
-            # Skip lockfiles and minified bundles
-            if fname.endswith((".lock", "-lock.json", ".min.js", ".min.css")):
-                continue
-            fpath = os.path.join(dirpath, fname)
-            try:
-                with open(fpath, "r", errors="ignore") as f:
-                    content = f.read()
-            except Exception:
-                continue
-            yield fpath, content, content.split("\n")
+    for fpath in iter_source_files(root, extensions or ALL_EXTS):
+        content = read_text(fpath)
+        if content is None:
+            continue
+        yield fpath, content, content.split("\n")
 
 
 def add(severity, category, msg):
@@ -56,85 +44,104 @@ def line_num(content, pos):
     return content[:pos].count("\n") + 1
 
 
+def line_at(content, lines, pos):
+    ln = line_num(content, pos)
+    text = lines[ln - 1] if ln <= len(lines) else ""
+    return ln, text
+
+
 # ---------------------------------------------------------------------------
-# 1. SECRET DETECTION (expanded patterns)
+# 1. SECRET DETECTION
 # ---------------------------------------------------------------------------
 
+# Structured tokens have a fixed format — matching them case-insensitively
+# destroys their precision (AKIA keys are uppercase by definition).
+# Tuple: (pattern, label, regex flags)
 SECRET_PATTERNS = [
     # Cloud provider keys
-    (r"AKIA[0-9A-Z]{16}", "AWS Access Key ID"),
-    (r"(?:aws).{0,20}['\"][0-9a-zA-Z/+]{40}['\"]", "AWS Secret Access Key"),
-    (r"AIza[0-9A-Za-z\-_]{35}", "Google API Key"),
-    (r'"type"\s*:\s*"service_account"', "GCP Service Account JSON"),
-    (r"AZURE[_-]?(?:STORAGE|SUBSCRIPTION|TENANT|CLIENT)[_-]?(?:KEY|ID|SECRET)\s*[=:]\s*['\"][^'\"]{8,}['\"]", "Azure credential"),
+    (r"\bAKIA[0-9A-Z]{16}\b", "AWS Access Key ID", 0),
+    (r"(?:aws|AWS).{0,20}['\"][0-9a-zA-Z/+]{40}['\"]", "AWS Secret Access Key", 0),
+    (r"\bAIza[0-9A-Za-z\-_]{35}\b", "Google API Key", 0),
+    (r'"type"\s*:\s*"service_account"', "GCP Service Account JSON", 0),
+    (r"AZURE[_-]?(?:STORAGE|SUBSCRIPTION|TENANT|CLIENT)[_-]?(?:KEY|ID|SECRET)\s*[=:]\s*['\"][^'\"]{8,}['\"]", "Azure credential", re.IGNORECASE),
 
     # SaaS tokens
-    (r"ghp_[a-zA-Z0-9]{36}", "GitHub Personal Access Token"),
-    (r"gho_[a-zA-Z0-9]{36}", "GitHub OAuth Token"),
-    (r"ghu_[a-zA-Z0-9]{36}", "GitHub User-to-Server Token"),
-    (r"ghs_[a-zA-Z0-9]{36}", "GitHub Server-to-Server Token"),
-    (r"github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}", "GitHub Fine-Grained PAT"),
-    (r"xox[bpras]-[a-zA-Z0-9\-]{10,}", "Slack Token"),
-    (r"sk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}", "OpenAI API Key"),
-    (r"sk-(?:proj-|ant-)?[a-zA-Z0-9\-_]{20,}", "API Secret Key (sk-*)"),
-    (r"sk_live_[a-zA-Z0-9]{24,}", "Stripe Live Secret Key"),
-    (r"rk_live_[a-zA-Z0-9]{24,}", "Stripe Restricted Key"),
-    (r"sq0atp-[a-zA-Z0-9\-_]{22}", "Square Access Token"),
-    (r"SG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}", "SendGrid API Key"),
-    (r"key-[a-zA-Z0-9]{32}", "Mailgun API Key"),
-    (r"(?:twilio|TWILIO).{0,20}SK[a-f0-9]{32}", "Twilio API Key"),
+    (r"\bghp_[a-zA-Z0-9]{36}\b", "GitHub Personal Access Token", 0),
+    (r"\bgho_[a-zA-Z0-9]{36}\b", "GitHub OAuth Token", 0),
+    (r"\bghu_[a-zA-Z0-9]{36}\b", "GitHub User-to-Server Token", 0),
+    (r"\bghs_[a-zA-Z0-9]{36}\b", "GitHub Server-to-Server Token", 0),
+    (r"\bgithub_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}\b", "GitHub Fine-Grained PAT", 0),
+    (r"\bxox[bpras]-[a-zA-Z0-9\-]{10,}", "Slack Token", 0),
+    (r"\bsk-[a-zA-Z0-9]{20}T3BlbkFJ[a-zA-Z0-9]{20}\b", "OpenAI API Key", 0),
+    (r"\bsk-(?:proj|ant|api)-[a-zA-Z0-9\-_]{24,}", "API Secret Key (sk-proj/sk-ant)", 0),
+    (r"\bsk_live_[a-zA-Z0-9]{24,}\b", "Stripe Live Secret Key", 0),
+    (r"\brk_live_[a-zA-Z0-9]{24,}\b", "Stripe Restricted Key", 0),
+    (r"\bsq0atp-[a-zA-Z0-9\-_]{22}\b", "Square Access Token", 0),
+    (r"\bSG\.[a-zA-Z0-9\-_]{22}\.[a-zA-Z0-9\-_]{43}\b", "SendGrid API Key", 0),
+    (r"\bkey-[a-f0-9]{32}\b", "Mailgun API Key", 0),
+    (r"(?:twilio|TWILIO).{0,20}SK[a-f0-9]{32}", "Twilio API Key", 0),
 
-    # Generic patterns
-    (r"(?:password|passwd|pwd)\s*[=:]\s*[\"'][^\"']{4,}[\"']", "Possible hardcoded password"),
-    (r"(?:api[_-]?key|apikey)\s*[=:]\s*[\"'][^\"']{8,}[\"']", "Possible hardcoded API key"),
-    (r"(?:secret|token|auth)\s*[=:]\s*[\"'][A-Za-z0-9+/=_\-]{16,}[\"']", "Possible hardcoded secret/token"),
-    (r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----", "Private key in source code"),
-    (r"-----BEGIN CERTIFICATE-----", "Certificate in source code"),
+    # Generic patterns — these need IGNORECASE and placeholder filtering
+    (r"(?:password|passwd|pwd)\s*[=:]\s*[\"'][^\"']{4,}[\"']", "Possible hardcoded password", re.IGNORECASE),
+    (r"(?:api[_-]?key|apikey)\s*[=:]\s*[\"'][^\"']{8,}[\"']", "Possible hardcoded API key", re.IGNORECASE),
+    (r"(?:secret|token|auth)\s*[=:]\s*[\"'][A-Za-z0-9+/=_\-]{16,}[\"']", "Possible hardcoded secret/token", re.IGNORECASE),
+    (r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |PGP )?PRIVATE KEY-----", "Private key in source code", 0),
 
     # JWT tokens (3 base64 segments separated by dots)
-    (r"eyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}", "Hardcoded JWT token"),
+    (r"\beyJ[a-zA-Z0-9_-]{10,}\.eyJ[a-zA-Z0-9_-]{10,}\.[a-zA-Z0-9_-]{10,}", "Hardcoded JWT token", 0),
 ]
 
-# Common false positives to skip
-FALSE_POSITIVE_HINTS = [
-    "example", "placeholder", "your_", "xxx", "changeme", "password123",
-    "test", "dummy", "sample", "fake", "mock", "todo", "fixme",
-    "process.env", "os.environ", "os.getenv", "env(", "${",
-    "import ", "require(", "from ",
+# Values/lines that are clearly placeholders. Checked against the matched LINE,
+# not a wide context window — "a real AWS key near an import statement" must
+# still be reported.
+PLACEHOLDER_HINTS = [
+    "example", "placeholder", "your_", "your-", "xxx", "changeme",
+    "password123", "dummy", "sample", "fake", "mock", "todo", "fixme",
+    "<", "...",
 ]
+# Lines that read the value from the environment are fine — but only for the
+# generic patterns; a structured token literal is a finding regardless.
+ENV_LOOKUP_HINTS = ["process.env", "os.environ", "os.getenv", "env(", "${", "getenv"]
+
+GENERIC_LABELS = {"Possible hardcoded password", "Possible hardcoded API key",
+                  "Possible hardcoded secret/token"}
 
 
 def check_secrets():
     for fpath, content, lines in walk_files():
         rel = os.path.relpath(fpath, root)
-        for pattern, label in SECRET_PATTERNS:
-            for m in re.finditer(pattern, content, re.IGNORECASE):
-                matched = m.group()
-                context = content[max(0, m.start() - 80):m.end() + 40].lower()
-                # Skip false positives
-                if any(fp in context for fp in FALSE_POSITIVE_HINTS):
+        is_test_file = bool(re.search(r"(^|/)(tests?|__tests__|spec|fixtures?)(/|$)|\.(test|spec)\.",
+                                      rel.replace(os.sep, "/")))
+        for pattern, label, flags in SECRET_PATTERNS:
+            for m in re.finditer(pattern, content, flags):
+                ln, line_text = line_at(content, lines, m.start())
+                lowered = line_text.lower()
+                if any(fp in lowered for fp in PLACEHOLDER_HINTS):
                     continue
-                ln = line_num(content, m.start())
-                add("critical", "secrets", f"{label}: {rel}:{ln}")
+                if label in GENERIC_LABELS and any(h in line_text for h in ENV_LOOKUP_HINTS):
+                    continue
+                severity = "high" if (is_test_file or label in GENERIC_LABELS) else "critical"
+                suffix = " (in test/fixture — verify it is not a real credential)" if is_test_file else ""
+                add(severity, "secrets", f"{label}: {rel}:{ln}{suffix}")
 
         # Entropy-based detection for generic assignment patterns
-        # Look for variable assignments with high-entropy string values
         for m in re.finditer(
             r'(?:key|secret|token|password|credential|auth)[_\w]*\s*[=:]\s*["\']([A-Za-z0-9+/=_\-]{20,})["\']',
             content, re.IGNORECASE
         ):
             value = m.group(1)
-            context = content[max(0, m.start() - 60):m.end() + 20].lower()
-            if any(fp in context for fp in FALSE_POSITIVE_HINTS):
+            ln, line_text = line_at(content, lines, m.start())
+            lowered = line_text.lower()
+            if any(fp in lowered for fp in PLACEHOLDER_HINTS):
                 continue
-            entropy = _shannon_entropy(value)
-            if entropy > 4.5:
-                ln = line_num(content, m.start())
-                add("critical", "secrets", f"High-entropy secret (entropy={entropy:.1f}): {rel}:{ln}")
+            if any(h in line_text for h in ENV_LOOKUP_HINTS):
+                continue
+            if _shannon_entropy(value) > 4.5:
+                add("high", "secrets",
+                    f"High-entropy secret (entropy={_shannon_entropy(value):.1f}): {rel}:{ln}")
 
 
 def _shannon_entropy(s):
-    """Calculate Shannon entropy of a string."""
     if not s:
         return 0
     freq = defaultdict(int)
@@ -145,29 +152,32 @@ def _shannon_entropy(s):
 
 
 # ---------------------------------------------------------------------------
-# 2. .env FILES COMMITTED
+# 2. .env FILES
 # ---------------------------------------------------------------------------
 
 def check_env_files():
-    """Flag .env files that exist in the repo (should be gitignored)."""
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if fname == ".env" or (fname.startswith(".env.") and not fname.endswith(".example") and not fname.endswith(".sample") and not fname.endswith(".template")):
-                fpath = os.path.relpath(os.path.join(dirpath, fname), root)
-                # Check if it contains actual values (not just variable names)
-                try:
-                    with open(os.path.join(dirpath, fname), "r", errors="ignore") as f:
-                        for line in f:
-                            line = line.strip()
-                            if line and not line.startswith("#") and "=" in line:
-                                key, _, val = line.partition("=")
-                                val = val.strip().strip("\"'")
-                                if val and val not in ("", "changeme", "your_value_here"):
-                                    add("critical", "secrets", f".env file with values present: {fpath} — should be gitignored")
-                                    return
-                except Exception:
-                    pass
+    """Flag .env files with real values — but only when they are NOT gitignored.
+    A properly-ignored local .env is correct practice, not a finding."""
+    # iter_source_files already excludes gitignored files inside a git repo,
+    # so anything it yields here is tracked or would be committed.
+    for fpath in iter_source_files(root, None):
+        fname = os.path.basename(fpath)
+        if not (fname == ".env" or (fname.startswith(".env.")
+                and not fname.endswith((".example", ".sample", ".template")))):
+            continue
+        rel = os.path.relpath(fpath, root)
+        if is_ignored_by_git(root, rel):
+            continue
+        content = read_text(fpath) or ""
+        for line in content.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                _, _, val = line.partition("=")
+                val = val.strip().strip("\"'")
+                if val and val.lower() not in ("", "changeme", "your_value_here", "true", "false"):
+                    add("critical", "secrets",
+                        f".env file with values is not gitignored: {rel} — add it to .gitignore and rotate any real credentials")
+                    break  # one finding per file, keep checking other .env files
 
 
 # ---------------------------------------------------------------------------
@@ -179,8 +189,11 @@ INJECTION_PATTERNS_JS = [
     (r"(?:query|execute|raw)\s*\(\s*[`'\"].*\$\{", "Potential SQL injection (template literal in query)"),
     (r"(?:query|execute|raw)\s*\(\s*['\"].*\+\s*(?:req\.|params\.|query\.|body\.)", "Potential SQL injection (string concat with user input)"),
 
-    # XSS
-    (r"\.innerHTML\s*=\s*(?!['\"]\s*$)", "innerHTML assignment — potential XSS"),
+    # XSS — skip assignments of a pure string literal (no interpolation).
+    # (?m) so the $ anchors work per-line; the \s* must live INSIDE the
+    # lookahead, otherwise the engine backtracks past it and the exclusion
+    # never applies.
+    (r"(?m)\.innerHTML\s*=(?!\s*(?:'[^'$]*'|\"[^\"$]*\"|`[^`$]*`)\s*;?\s*$)", "innerHTML assignment — potential XSS"),
     (r"dangerouslySetInnerHTML", "dangerouslySetInnerHTML — ensure input is sanitized"),
     (r"document\.write\s*\(", "document.write — potential XSS"),
     (r"v-html\s*=", "v-html directive — potential XSS if data is user-controlled"),
@@ -191,17 +204,21 @@ INJECTION_PATTERNS_JS = [
 
     # Path traversal
     (r"(?:readFile|writeFile|createReadStream|unlink|readdir)\s*\([^)]*(?:req\.|params\.|query\.|body\.)", "Potential path traversal (user input in file operation)"),
-    (r"\.\.\/", None),  # tracked separately below
+
+    # SSRF / open redirect
+    (r"(?:fetch|axios(?:\.\w+)?|got|request)\s*\(\s*(?:req\.|params\.|query\.|body\.)", "User input as outbound request URL — potential SSRF"),
+    (r"res\.redirect\s*\(\s*(?:req\.|params\.|query\.|body\.)", "User input in redirect target — potential open redirect"),
 
     # Prototype pollution
     (r"Object\.assign\s*\(\s*\{\s*\}\s*,.*(?:req\.|params\.|body\.)", "Potential prototype pollution via Object.assign with user input"),
     (r"\[(?:req|params|query|body)\.[^\]]+\]\s*=", "Potential prototype pollution (dynamic property assignment from user input)"),
 
-    # Template injection
-    (r"new\s+Function\s*\(.*(?:req\.|params\.|body\.)", "Potential template injection via Function constructor"),
+    # Code execution
+    (r"new\s+Function\s*\(.*(?:req\.|params\.|body\.)", "Potential code injection via Function constructor"),
+    (r"(?<![.\w])eval\s*\(", "eval() usage — avoid if possible, especially with dynamic input"),
 
-    # Eval
-    (r"\beval\s*\(", "eval() usage — avoid if possible, especially with dynamic input"),
+    # JWT misconfiguration
+    (r"algorithms?\s*:\s*\[[^\]]*['\"]none['\"]", "JWT 'none' algorithm accepted — signature bypass"),
 
     # Regex DoS
     (r"new\s+RegExp\s*\(.*(?:req\.|params\.|query\.|body\.)", "User input in RegExp constructor — potential ReDoS"),
@@ -218,15 +235,20 @@ INJECTION_PATTERNS_PY = [
     (r"subprocess.*shell\s*=\s*True", "subprocess with shell=True — potential command injection"),
     (r"os\.popen\s*\(", "os.popen() — use subprocess with shell=False instead"),
 
-    # Code execution
-    (r"\beval\s*\(", "eval() usage — avoid with dynamic input"),
-    (r"\bexec\s*\(", "exec() usage — avoid with dynamic input"),
+    # Code execution. Lookbehind excludes method calls like model.eval() —
+    # ubiquitous in ML code and unrelated to Python's builtin eval.
+    (r"(?<![.\w])eval\s*\(", "eval() usage — avoid with dynamic input"),
+    (r"(?<![.\w])exec\s*\(", "exec() usage — avoid with dynamic input"),
     (r"pickle\.loads?\s*\(", "pickle deserialization — unsafe with untrusted data"),
     (r"yaml\.load\s*\((?!.*Loader\s*=\s*yaml\.SafeLoader)", "yaml.load without SafeLoader — use yaml.safe_load"),
     (r"marshal\.loads?\s*\(", "marshal deserialization — unsafe with untrusted data"),
 
     # Path traversal
     (r"open\s*\(.*(?:request\.|args\.|form\.)", "Potential path traversal (user input in file open)"),
+
+    # SSRF / open redirect
+    (r"requests\.(?:get|post|put|delete|head)\s*\(\s*(?:request\.|args\.|form\.)", "User input as outbound request URL — potential SSRF"),
+    (r"redirect\s*\(\s*request\.", "User input in redirect target — potential open redirect"),
 
     # Template injection (Jinja2, etc.)
     (r"Template\s*\(.*(?:request\.|args\.|form\.)", "Potential server-side template injection"),
@@ -243,13 +265,13 @@ INJECTION_PATTERNS_GO = [
 ]
 
 INJECTION_PATTERNS_PHP = [
-    (r"\$_(?:GET|POST|REQUEST|COOKIE)\s*\[", None),  # tracked for context
     (r"mysql_query\s*\(", "mysql_query is deprecated and unsafe — use PDO with prepared statements"),
     (r"mysqli?_query\s*\(\s*\$\w+\s*,\s*[\"'].*\\\$", "Potential SQL injection (variable in query string)"),
-    (r"\beval\s*\(", "eval() usage — avoid with user input"),
+    (r"(?<![\w$])eval\s*\(", "eval() usage — avoid with user input"),
     (r"(?:include|require)(?:_once)?\s*\(\s*\$", "Dynamic include/require — potential LFI/RFI"),
     (r"unserialize\s*\(", "unserialize — unsafe with untrusted data"),
     (r"shell_exec\s*\(|`[^`]*\$", "Shell execution — potential command injection"),
+    (r"header\s*\(\s*['\"]Location:\s*['\"]?\s*\.\s*\$_(?:GET|POST|REQUEST)", "User input in redirect — potential open redirect"),
 ]
 
 
@@ -269,13 +291,9 @@ def check_injections():
             patterns = INJECTION_PATTERNS_PHP
 
         for pattern, label in patterns:
-            if label is None:
-                continue
             for m in re.finditer(pattern, content, re.IGNORECASE):
-                ln = line_num(content, m.start())
-                # Skip comments
-                line_text = lines[ln - 1].strip() if ln <= len(lines) else ""
-                if line_text.startswith(("//", "#", "*", "/*", "<!--")):
+                ln, line_text = line_at(content, lines, m.start())
+                if line_text.strip().startswith(("//", "#", "*", "/*", "<!--")):
                     continue
                 add("high", "injection", f"{label}: {rel}:{ln}")
 
@@ -285,26 +303,27 @@ def check_injections():
 # ---------------------------------------------------------------------------
 
 def check_access_control():
-    """Look for missing auth patterns, CORS misconfig, CSRF issues."""
     for fpath, content, lines in walk_files(SOURCE_EXTS | CONFIG_EXTS):
         rel = os.path.relpath(fpath, root)
         ext = os.path.splitext(fpath)[1]
 
         # Overly permissive CORS
-        if re.search(r"""(?:Access-Control-Allow-Origin|cors)\s*[=:(\[{]\s*['"]?\*['"]?""", content, re.IGNORECASE):
-            ln = line_num(content, re.search(r"(?:Access-Control-Allow-Origin|cors)\s*[=:(\[{]\s*['\"]?\*", content, re.IGNORECASE).start())
-            add("high", "access-control", f"CORS allows all origins (*): {rel}:{ln}")
+        m = re.search(r"""(?:Access-Control-Allow-Origin|cors)\s*[=:(\[{]\s*['"]?\*""", content, re.IGNORECASE)
+        if m:
+            add("high", "access-control", f"CORS allows all origins (*): {rel}:{line_num(content, m.start())}")
 
         # Credentials with wildcard CORS
         if re.search(r"credentials\s*:\s*true", content, re.IGNORECASE) and re.search(r"origin\s*:\s*['\"]?\*", content, re.IGNORECASE):
             add("critical", "access-control", f"CORS with credentials:true and wildcard origin — credential theft risk: {rel}")
 
-        # Missing CSRF protection (Express/Connect)
+        # Missing CSRF protection — only meaningful for cookie/session auth.
+        # Token-auth APIs (Authorization header) don't need CSRF tokens, so
+        # require evidence of cookie/session use before flagging.
         if ext in (".ts", ".js") and re.search(r"app\.(post|put|patch|delete)\s*\(", content):
-            if not re.search(r"csrf|csurf|csrfToken|_csrf", content, re.IGNORECASE):
-                # Only flag route files, not utility modules
+            uses_cookies = re.search(r"\b(?:cookie-session|express-session|cookieParser|res\.cookie)\b", content)
+            if uses_cookies and not re.search(r"csrf|csurf|csrfToken|_csrf|sameSite", content, re.IGNORECASE):
                 if any(x in rel.lower() for x in ["route", "controller", "handler", "api", "server"]):
-                    add("medium", "access-control", f"State-changing routes without CSRF protection: {rel}")
+                    add("medium", "access-control", f"Cookie/session-based state-changing routes without CSRF protection: {rel}")
 
         # Disabled security features
         for pattern, label in [
@@ -317,36 +336,46 @@ def check_access_control():
             (r"verify\s*=\s*False", "Python SSL verification disabled"),
         ]:
             for m in re.finditer(pattern, content, re.IGNORECASE):
-                ln = line_num(content, m.start())
-                add("high", "access-control", f"{label}: {rel}:{ln}")
+                add("high", "access-control", f"{label}: {rel}:{line_num(content, m.start())}")
 
 
 # ---------------------------------------------------------------------------
 # 5. INSECURE CRYPTO & HASHING
 # ---------------------------------------------------------------------------
 
+SECURITY_CONTEXT_WORDS = ["token", "secret", "password", "key", "auth",
+                          "session", "nonce", "salt", "csrf", "otp", "uuid"]
+
+
+def _in_security_context(content, start, end):
+    context = content[max(0, start - 200):end + 200].lower()
+    return any(w in context for w in SECURITY_CONTEXT_WORDS)
+
+
 def check_crypto():
     for fpath, content, lines in walk_files(SOURCE_EXTS):
         rel = os.path.relpath(fpath, root)
-        for pattern, label in [
-            (r"createHash\s*\(\s*['\"](?:md5|sha1)['\"]", "Weak hash algorithm (MD5/SHA1) — use SHA-256+"),
-            (r"hashlib\.(?:md5|sha1)\s*\(", "Weak hash algorithm (MD5/SHA1) — use SHA-256+"),
-            (r"Math\.random\s*\(", "Math.random() for security-sensitive context — use crypto.randomUUID or crypto.getRandomValues"),
-            (r"random\.random\s*\(|random\.randint\s*\(", "random module is not cryptographically secure — use secrets module"),
-            (r"DES|Blowfish|RC4|RC2", "Weak/deprecated cipher algorithm"),
-            (r"ECB", "ECB mode — does not provide semantic security"),
-            (r"padding\s*=\s*(?:PKCS1v15|pkcs1)", "PKCS1v15 padding — use OAEP for RSA encryption"),
+        for pattern, label, needs_context in [
+            (r"createHash\s*\(\s*['\"](?:md5|sha1)['\"]", "Weak hash algorithm (MD5/SHA1) — use SHA-256+", False),
+            (r"hashlib\.(?:md5|sha1)\s*\(", "Weak hash algorithm (MD5/SHA1) — use SHA-256+", False),
+            (r"Math\.random\s*\(", "Math.random() for security-sensitive value — use crypto.randomUUID or crypto.getRandomValues", True),
+            (r"random\.(?:random|randint|choice|randrange)\s*\(", "random module for security-sensitive value — use the secrets module", True),
+            # Word boundaries: without them 'DES' matches SQL 'ORDER BY x DESC'.
+            # Cipher names additionally require a crypto-ish context word.
+            (r"\b(?:DES|3DES|RC4|RC2|Blowfish)\b", "Weak/deprecated cipher algorithm", True),
+            (r"\bECB\b", "ECB mode — does not provide semantic security", True),
+            (r"padding\s*=\s*(?:PKCS1v15|pkcs1)", "PKCS1v15 padding — use OAEP for RSA encryption", False),
         ]:
             for m in re.finditer(pattern, content):
-                ln = line_num(content, m.start())
-                line_text = lines[ln - 1].strip() if ln <= len(lines) else ""
-                if line_text.startswith(("//", "#", "*", "/*")):
+                ln, line_text = line_at(content, lines, m.start())
+                if line_text.strip().startswith(("//", "#", "*", "/*")):
                     continue
-                # Math.random is only a concern in security context
-                if "Math.random" in pattern:
-                    # Check surrounding context for security-related usage
-                    context = content[max(0, m.start() - 200):m.end() + 200].lower()
-                    if not any(w in context for w in ["token", "secret", "password", "key", "auth", "session", "nonce", "salt", "hash", "random id", "uuid"]):
+                if needs_context:
+                    if pattern.startswith(r"\b"):  # cipher names: need crypto context
+                        context = content[max(0, m.start() - 200):m.end() + 200].lower()
+                        if not any(w in context for w in ["cipher", "crypt", "encrypt", "decrypt", "algorithm", "aes"]):
+                            continue
+                    elif not _in_security_context(content, m.start(), m.end()):
                         continue
                 add("medium", "crypto", f"{label}: {rel}:{ln}")
 
@@ -355,21 +384,23 @@ def check_crypto():
 # 6. INFORMATION DISCLOSURE
 # ---------------------------------------------------------------------------
 
+DEV_CONFIG_HINT = re.compile(r"(example|sample|template|\.dev|dev\.|local|test)", re.IGNORECASE)
+
+
 def check_info_disclosure():
-    for fpath, content, lines in walk_files(SOURCE_EXTS):
+    for fpath, content, lines in walk_files(SOURCE_EXTS | {".env", ".ini", ".cfg", ".toml", ".yaml", ".yml"}):
         rel = os.path.relpath(fpath, root)
         for pattern, label in [
-            # Stack traces sent to client
             (r"res\.(?:send|json|status)\s*\([^)]*(?:err\.stack|error\.stack|stackTrace)", "Stack trace sent in response — information disclosure"),
             (r"(?:message|detail|error)\s*:\s*(?:err|error)\.(?:message|stack)", "Error details sent to client — may leak internals"),
-            # Debug mode in production config
             (r"DEBUG\s*[=:]\s*(?:True|true|1|['\"]true['\"])", "Debug mode enabled — ensure this is dev-only"),
-            # Verbose error pages
             (r"app\.use\s*\(\s*errorHandler\s*\(\s*\{\s*[^}]*debug\s*:\s*true", "Debug error handler enabled"),
         ]:
+            # Debug flags in example/dev/test configs are expected, not findings.
+            if "Debug mode" in label and DEV_CONFIG_HINT.search(rel):
+                continue
             for m in re.finditer(pattern, content):
-                ln = line_num(content, m.start())
-                add("medium", "info-disclosure", f"{label}: {rel}:{ln}")
+                add("medium", "info-disclosure", f"{label}: {rel}:{line_num(content, m.start())}")
 
 
 # ---------------------------------------------------------------------------
@@ -388,7 +419,6 @@ def main():
         print("No security issues detected.")
         return
 
-    # Group and sort by severity
     severity_order = {"critical": 0, "high": 1, "medium": 2}
     issues.sort(key=lambda x: (severity_order.get(x[0], 3), x[1]))
 
@@ -397,8 +427,7 @@ def main():
         if category != current_cat:
             current_cat = category
             print(f"\n=== {category.upper()} ===")
-        severity_tag = {"critical": "CRITICAL", "high": "HIGH", "medium": "MEDIUM"}.get(severity, severity)
-        print(f"  [{severity_tag}] {msg}")
+        print(f"  [{severity.upper()}] {msg}")
 
     total = len(issues)
     critical = sum(1 for s, _, _ in issues if s == "critical")

@@ -17,6 +17,8 @@ Perform a thorough, opinionated code review of a project or set of files. The go
 
 **Security is not optional.** Every code review includes a security pass. You don't need to be asked specifically — vulnerabilities found early cost 100x less than those found in production.
 
+**Verify before you report.** No finding goes into the report unless you have read the actual code at that location and confirmed the problem yourself. The bundled scripts and even dedicated tools produce false positives; a report containing one wrong "critical" finding loses the reader's trust in all the correct ones. If you cannot confirm something but still think it's worth mentioning, label it explicitly as unverified.
+
 ## Review Process
 
 ### Step 1: Understand the Project
@@ -61,7 +63,7 @@ This is the default mode. When there are changed files (uncommitted work, or a f
 
 If a changed file touches auth, validation, or data handling, also read the related files it interacts with (the caller, the route that uses this handler, the model it queries) to understand the full picture.
 
-Still run `check_deps.py` if package/dependency files changed, and `check_docs.py` if docs or project structure changed.
+In diff mode, Steps 3 and 4 still apply — but scoped to the changed code and its blast radius, not the whole codebase. Ask of each change: does it open a trust-boundary issue, does it break an assumption elsewhere, does it contradict the docs? Still run `check_deps.py` if package/dependency files changed, and `check_docs.py` if docs or project structure changed.
 
 #### No changes (clean repo) or user asks for full/deep scan → Full codebase review
 
@@ -86,49 +88,49 @@ Your job as the reviewer is to:
 
 Think of it this way: the scripts are a metal detector. You're the archaeologist who decides what's actually treasure.
 
+#### Prefer the Project's Own Tools and Installed Scanners
+
+Before reaching for the bundled scripts, use what the project and the machine already provide — purpose-built tools respect project config and have far better precision than any generic regex scan:
+
+1. **The project's own quality gates.** If `package.json` scripts, a Makefile/justfile, or CI config define lint, type-check, or test commands, run them (`npm run lint`, `tsc --noEmit`, `ruff check`, `go vet`, `phpstan`, the test suite). Failures here are confirmed findings, not candidates.
+2. **Installed dedicated scanners.** Check availability (`which gitleaks semgrep jscpd`, `npx --no-install eslint --version`) and prefer them for their domain: `gitleaks` for secrets, `semgrep` for security patterns, `jscpd` for duplication, `eslint`/`ruff` for lint-level smells, `knip`/`depcheck` for unused dependencies, `osv-scanner`/`npm audit`/`pip-audit` for vulnerable dependencies.
+3. **The bundled scripts** are the zero-dependency fallback — they need only Python 3 and work on any codebase. `check_docs.py` (documentation drift) has no standard-tool equivalent, so run it regardless.
+
+Don't install tools without asking, and don't let tool output substitute for your own reading — the verification rule applies to every source of findings equally.
+
 #### Available Scripts (for large codebases)
 
-**Duplicate / Similar Code Detection** — Find exact duplicate blocks (5+ lines) using a hash-based approach. Auto-detects project language.
+**Duplicate / Similar Code Detection** — exact duplicate blocks (5+ lines, merged into maximal spans), hash-based, multi-language.
 
 ```bash
 python3 <skill-path>/scripts/find_dupes.py
 ```
 
-#### Inconsistency Detection
-
-Checks for mixed import styles, inconsistent quotes, leftover console.log/print, TODO/FIXME comments, and empty catch/except blocks.
+**Inconsistency Detection** — empty catch/except blocks, leftover console.log/print, mixed module systems, TODO/FIXME summary.
 
 ```bash
 python3 <skill-path>/scripts/find_inconsistencies.py
 ```
 
-#### Complexity Analysis
-
-Finds files over 300 lines, functions over 50 lines, and measures cyclomatic complexity (NIST threshold: 10), cognitive complexity (SonarQube threshold: 15), excessive parameters (>5), and deep nesting (>4 levels).
+**Complexity Analysis** — files over 300 lines, functions over 50 lines, cyclomatic complexity (NIST threshold: 10), cognitive complexity (SonarQube threshold: 15), excessive parameters (>5), deep nesting (>4 levels). Heuristic, not a parser — treat the numbers as ranking, not gospel.
 
 ```bash
 python3 <skill-path>/scripts/find_complexity.py
 ```
 
-#### Security Scan
-
-Comprehensive security analysis covering secrets detection (AWS/GCP/GitHub/Slack/Stripe keys, entropy-based detection), injection patterns (SQL/XSS/command/template injection, path traversal, prototype pollution), access control issues (CORS misconfiguration, missing CSRF, disabled TLS verification), weak cryptography, and information disclosure.
+**Security Scan** — secrets detection (cloud/SaaS token formats, entropy-based detection), injection patterns (SQL/XSS/command/template injection, path traversal, SSRF, open redirect, prototype pollution), access control issues (CORS misconfiguration, cookie-based routes without CSRF, disabled TLS verification), weak cryptography, and information disclosure. Respects .gitignore — a properly-ignored local `.env` is not a finding.
 
 ```bash
 python3 <skill-path>/scripts/check_security_deep.py
 ```
 
-#### Dependency Health
-
-Multi-ecosystem dependency analysis: unused dependencies, lockfile integrity, unpinned versions, `npm audit`/`pip-audit` integration, GitHub Actions supply chain checks.
+**Dependency Health** — unused dependencies, lockfile integrity, unpinned versions, `npm audit`/`pip-audit` integration, GitHub Actions supply chain checks.
 
 ```bash
 python3 <skill-path>/scripts/check_deps.py
 ```
 
-#### Documentation vs Code Consistency
-
-Check if README.md, CLAUDE.md, and other docs actually match reality. This catches the silent rot where code evolves but docs don't — or docs describe an ideal that was never implemented.
+**Documentation vs Code Consistency** — checks if README.md, CLAUDE.md, and other docs actually match reality. This catches the silent rot where code evolves but docs don't — or docs describe an ideal that was never implemented.
 
 ```bash
 python3 <skill-path>/scripts/check_docs.py
@@ -304,6 +306,17 @@ Structure the report by severity, not by file. Group related issues together.
 [Seriously — call out things that are done well. Reviews that are all negative are demoralizing and usually wrong.]
 ```
 
+#### Severity Rubric
+
+Use the same bar every time, so severity means something across reviews:
+
+- **Critical** — exploitable vulnerability, data loss/corruption risk, or a bug that breaks core functionality in production. Leaked credentials are always critical.
+- **High** — security weakness that needs a second precondition to exploit, a bug that corrupts edge-case behavior, or a missing safeguard on a trust boundary (no rate limit on auth, unbounded query on a public endpoint).
+- **Medium** — will cause problems as the code grows or the team changes: error swallowing, missing tests on complex logic, architecture drift, misleading docs.
+- **Low** — style, naming, minor duplication. Real but cheap to ignore.
+
+When in doubt, ask: "what actually happens, to whom, and how likely is it?" — and rate the answer, not the pattern.
+
 #### Rules for Writing Findings
 
 - **Always include the file path and line number.** `server/api/users.ts:45` not "in the users API"
@@ -331,4 +344,4 @@ After presenting, offer to:
 - **Very large codebase (500+ files)**: Focus on the most important directories (src/, app/, server/) and sample rather than scanning everything
 - **Generated code**: Skip files that are clearly auto-generated (migrations, lockfiles, compiled output, .d.ts files)
 - **No clear entry point**: Start with the most-imported files — they're the backbone of the project
-- **Security-only review**: If the user specifically asks for a security audit, skip Steps 2's quality scans (dupes, inconsistencies) and focus entirely on Steps 2's security/deps scans + Step 3's manual security review. Use a streamlined report format focused on findings by OWASP category.
+- **Security-only review**: If the user specifically asks for a security audit, skip the quality scans (dupes, inconsistencies, complexity) and focus entirely on the security/dependency scans plus Step 3's manual security review. Use a streamlined report format focused on findings by OWASP category.

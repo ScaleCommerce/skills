@@ -5,18 +5,17 @@ audit integration, supply chain checks. Multi-ecosystem (npm, pip, go, cargo, co
 """
 import os
 import re
+import glob
 import json
 import sys
 import subprocess
 from pathlib import Path
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from common import iter_source_files, read_text
+
 root = sys.argv[1] if len(sys.argv) > 1 else "."
 issues = []  # (severity, message)
-
-SKIP_DIRS = {
-    "node_modules", ".git", "vendor", "dist", "__pycache__", ".venv",
-    ".nuxt", ".next", ".output", "build", "coverage", ".tox", "venv",
-}
 
 
 def add(severity, msg):
@@ -55,6 +54,48 @@ if os.path.exists(gemfile_path):
 # 2. NPM / NODE CHECKS
 # ---------------------------------------------------------------------------
 
+# Specs that reference git repos, local paths, workspace links or tarballs are
+# intentionally pinned/local — flagging them as "unpinned" is a false positive.
+LOCAL_SPEC_PREFIXES = ("git+", "git:", "github:", "file:", "link:", "portal:",
+                       "workspace:", "http://", "https://")
+
+
+def collect_unpinned(deps_map, label=""):
+    for name, ver in deps_map.items():
+        ver = (ver or "").strip()
+        if ver.lower().startswith(LOCAL_SPEC_PREFIXES) or ver.endswith((".tgz", ".tar.gz")):
+            continue
+        if ver in ("*", "latest"):
+            add("high", f"Unpinned dependency (wildcard){label}: {name}@{ver}")
+        elif ver.startswith(">=") and "<" not in ver:
+            add("high", f"Unpinned dependency (unbounded range){label}: {name}@{ver}")
+
+
+def find_workspace_packages(pkg):
+    """Return workspace package.json paths for npm/yarn/pnpm monorepos."""
+    patterns = []
+    ws = pkg.get("workspaces")
+    if isinstance(ws, dict):
+        ws = ws.get("packages", [])
+    if isinstance(ws, list):
+        patterns.extend(p for p in ws if isinstance(p, str))
+    pnpm_ws = read_text(os.path.join(root, "pnpm-workspace.yaml"))
+    if pnpm_ws:
+        for m in re.finditer(r"^\s*-\s*['\"]?([^'\"\s#]+)", pnpm_ws, re.M):
+            patterns.append(m.group(1))
+    found = []
+    seen = set()
+    for pat in patterns:
+        if pat.startswith("!"):
+            continue
+        for d in glob.glob(os.path.join(root, pat)):
+            pj = os.path.join(d, "package.json")
+            if os.path.isdir(d) and os.path.exists(pj) and pj not in seen and "node_modules" not in pj:
+                seen.add(pj)
+                found.append(pj)
+    return found
+
+
 def check_npm():
     try:
         with open(pkg_json_path) as f:
@@ -66,17 +107,22 @@ def check_npm():
     dev_deps = pkg.get("devDependencies", {})
     all_deps = {**deps, **dev_deps}
 
-    # --- Unpinned versions ---
-    risky_ranges = []
-    for name, ver in all_deps.items():
-        ver = ver.strip()
-        if ver in ("*", "latest"):
-            risky_ranges.append((name, ver, "wildcard"))
-        elif ver.startswith(">=") and "<" not in ver:
-            risky_ranges.append((name, ver, "unbounded range"))
+    # --- Unpinned versions (root + workspace packages) ---
+    collect_unpinned(all_deps)
 
-    for name, ver, reason in risky_ranges:
-        add("high", f"Unpinned dependency ({reason}): {name}@{ver}")
+    # --- Monorepo / workspaces: audit + unused-dep checks below only cover
+    # the root package, so tell the agent coverage is partial ---
+    ws_pkgs = find_workspace_packages(pkg)
+    if ws_pkgs:
+        add("info", f"Monorepo detected: {len(ws_pkgs)} workspace packages — npm audit and unused-dep checks cover the root package only")
+        for pj in ws_pkgs[:30]:
+            try:
+                with open(pj) as f:
+                    ws_pkg = json.load(f)
+            except Exception:
+                continue
+            ws_deps = {**ws_pkg.get("dependencies", {}), **ws_pkg.get("devDependencies", {})}
+            collect_unpinned(ws_deps, label=f" in {os.path.relpath(pj, root)}")
 
     # --- Missing lockfile ---
     lockfiles = ["package-lock.json", "yarn.lock", "pnpm-lock.yaml", "bun.lockb"]
@@ -87,29 +133,22 @@ def check_npm():
     # --- Unused dependencies ---
     # Collect all imports/requires across source files
     imported = set()
-    for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS]
-        for fname in filenames:
-            if not any(fname.endswith(e) for e in (".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".mjs", ".cjs")):
-                continue
-            fpath = os.path.join(dirpath, fname)
-            try:
-                with open(fpath, "r", errors="ignore") as f:
-                    content = f.read()
-            except Exception:
-                continue
-            # ES imports: import ... from 'pkg'
-            for m in re.finditer(r"""(?:import|from)\s+['"]([@a-zA-Z][^'"]*?)['"]""", content):
-                pkg_name = m.group(1).split("/")[0]
-                if pkg_name.startswith("@"):
-                    pkg_name = "/".join(m.group(1).split("/")[:2])
-                imported.add(pkg_name)
-            # require('pkg')
-            for m in re.finditer(r"""require\s*\(\s*['"]([@a-zA-Z][^'"]*?)['"]""", content):
-                pkg_name = m.group(1).split("/")[0]
-                if pkg_name.startswith("@"):
-                    pkg_name = "/".join(m.group(1).split("/")[:2])
-                imported.add(pkg_name)
+    for fpath in iter_source_files(root, (".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".mjs", ".cjs")):
+        content = read_text(fpath)
+        if content is None:
+            continue
+        # ES imports: import ... from 'pkg'
+        for m in re.finditer(r"""(?:import|from)\s+['"]([@a-zA-Z][^'"]*?)['"]""", content):
+            pkg_name = m.group(1).split("/")[0]
+            if pkg_name.startswith("@"):
+                pkg_name = "/".join(m.group(1).split("/")[:2])
+            imported.add(pkg_name)
+        # require('pkg')
+        for m in re.finditer(r"""require\s*\(\s*['"]([@a-zA-Z][^'"]*?)['"]""", content):
+            pkg_name = m.group(1).split("/")[0]
+            if pkg_name.startswith("@"):
+                pkg_name = "/".join(m.group(1).split("/")[:2])
+            imported.add(pkg_name)
 
     # Also check config files that reference deps (nuxt.config, vite.config, etc.)
     for config_name in ["nuxt.config.ts", "nuxt.config.js", "vite.config.ts", "vite.config.js",
@@ -210,7 +249,10 @@ def check_python():
         try:
             with open(requirements_path) as f:
                 lines = [l.strip() for l in f if l.strip() and not l.startswith("#") and not l.startswith("-")]
-            unpinned = [l for l in lines if "==" not in l and not l.startswith("git+")]
+            # git+/file:/-e/URL/"pkg @ url" specs are intentionally pinned or local
+            unpinned = [l for l in lines
+                        if "==" not in l and " @ " not in l
+                        and not l.startswith(("git+", "file:", "http://", "https://", "-e", "./", "../"))]
             if unpinned:
                 add("high", f"No Python lockfile and {len(unpinned)} unpinned deps in requirements.txt: {', '.join(unpinned[:5])}")
         except Exception:
@@ -219,17 +261,29 @@ def check_python():
         add("medium", "No Python lockfile (poetry.lock, pdm.lock, etc.) — consider pinning dependencies")
 
     # --- pip audit (if available) ---
+    # Only ever audit an explicit project manifest. Running bare `pip-audit`
+    # would audit the agent's own Python environment, not the project.
+    if not os.path.exists(requirements_path):
+        if os.path.exists(pyproject_path) and "dependencies" in (read_text(pyproject_path) or ""):
+            add("info", "pip-audit skipped: no requirements.txt (pyproject.toml deps present — audit manually with `pip-audit .`)")
+        else:
+            add("info", "pip-audit skipped: no auditable Python manifest (requirements.txt) found")
+        return
+
     try:
         result = subprocess.run(
-            ["pip-audit", "--format=json", "-r", requirements_path] if os.path.exists(requirements_path) else ["pip-audit", "--format=json"],
+            ["pip-audit", "--format=json", "-r", requirements_path],
             capture_output=True, text=True, timeout=60, cwd=root
         )
         if result.stdout:
             try:
                 vulns = json.loads(result.stdout)
+                if isinstance(vulns, dict):  # newer pip-audit wraps results
+                    vulns = [d for d in vulns.get("dependencies", []) if d.get("vulns")]
                 if isinstance(vulns, list) and vulns:
-                    critical_vulns = [v for v in vulns if v.get("fix_versions")]
-                    add("high", f"pip-audit: {len(vulns)} vulnerable packages ({len(critical_vulns)} fixable) — run `pip-audit` for details")
+                    fixable = [v for v in vulns
+                               if v.get("fix_versions") or any(x.get("fix_versions") for x in v.get("vulns", []))]
+                    add("high", f"pip-audit: {len(vulns)} vulnerable packages ({len(fixable)} fixable) — run `pip-audit -r requirements.txt` for details")
             except json.JSONDecodeError:
                 pass
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -260,7 +314,69 @@ def check_go():
 
 
 # ---------------------------------------------------------------------------
-# 5. GITHUB ACTIONS / CI SUPPLY CHAIN
+# 5. RUST / PHP / RUBY CHECKS
+# ---------------------------------------------------------------------------
+
+def check_rust():
+    if not os.path.exists(os.path.join(root, "Cargo.lock")):
+        add("high", "No Cargo.lock — builds are non-deterministic (commit the lockfile)")
+    try:
+        result = subprocess.run(
+            ["cargo", "audit", "--json"],
+            capture_output=True, text=True, timeout=60, cwd=root
+        )
+        if result.stdout:
+            try:
+                report = json.loads(result.stdout)
+                count = report.get("vulnerabilities", {}).get("count", 0)
+                if count:
+                    add("critical", f"cargo audit: {count} vulnerable crates — run `cargo audit` for details")
+            except json.JSONDecodeError:
+                pass
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+def check_php():
+    if not os.path.exists(os.path.join(root, "composer.lock")):
+        add("high", "No composer.lock — installs are non-deterministic (commit the lockfile)")
+        return
+    try:
+        result = subprocess.run(
+            ["composer", "audit", "--format=json", "--no-interaction"],
+            capture_output=True, text=True, timeout=60, cwd=root
+        )
+        if result.stdout:
+            try:
+                report = json.loads(result.stdout)
+                advisories = report.get("advisories") or {}
+                if advisories:
+                    add("critical", f"composer audit: {len(advisories)} packages with security advisories — run `composer audit` for details")
+            except json.JSONDecodeError:
+                pass
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+def check_ruby():
+    if not os.path.exists(os.path.join(root, "Gemfile.lock")):
+        add("high", "No Gemfile.lock — installs are non-deterministic (commit the lockfile)")
+        return
+    try:
+        result = subprocess.run(
+            ["bundle", "audit", "check"],
+            capture_output=True, text=True, timeout=60, cwd=root
+        )
+        out = (result.stdout or "") + (result.stderr or "")
+        if result.returncode != 0 and "Vulnerabilities found" in out:
+            count = len(re.findall(r"^Name:", out, re.M))
+            add("critical", f"bundle audit: {count or 'multiple'} vulnerable gems — run `bundle audit` for details")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+# ---------------------------------------------------------------------------
+# 6. GITHUB ACTIONS / CI SUPPLY CHAIN
 # ---------------------------------------------------------------------------
 
 def check_ci_supply_chain():
@@ -269,28 +385,38 @@ def check_ci_supply_chain():
     if not os.path.isdir(workflows_dir):
         return
 
-    unpinned_actions = []
+    first_party_files = set()   # workflows pinning official actions by tag (low risk)
+    third_party = []            # (relpath, line, action@ref) — real supply chain surface
     for fname in os.listdir(workflows_dir):
         if not fname.endswith((".yml", ".yaml")):
             continue
         fpath = os.path.join(workflows_dir, fname)
         try:
             with open(fpath, "r", errors="ignore") as f:
-                content = f.read()
+                lines = f.read().splitlines()
         except Exception:
             continue
-        # Find uses: owner/repo@ref where ref is not a full SHA
-        for m in re.finditer(r"uses:\s*([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)@([^\s#]+)", content):
-            action, ref = m.group(1), m.group(2)
-            # SHA hashes are 40 chars hex
-            if not re.match(r"^[a-f0-9]{40}$", ref):
-                unpinned_actions.append(f"{action}@{ref}")
+        relpath = f".github/workflows/{fname}"
+        for lineno, line in enumerate(lines, 1):
+            # Find uses: owner/repo@ref where ref is not a full SHA
+            for m in re.finditer(r"uses:\s*([a-zA-Z0-9_-]+/[a-zA-Z0-9_.-]+)@([^\s#]+)", line):
+                action, ref = m.group(1), m.group(2)
+                if re.match(r"^[a-f0-9]{40}$", ref):  # full SHA — pinned
+                    continue
+                owner = action.split("/")[0].lower()
+                if owner in ("actions", "github"):
+                    first_party_files.add(relpath)
+                else:
+                    third_party.append((relpath, lineno, f"{action}@{ref}"))
 
-    if unpinned_actions:
-        unique = list(dict.fromkeys(unpinned_actions))  # dedupe preserving order
-        add("medium", f"Unpinned GitHub Actions (use SHA hash for supply chain safety): {', '.join(unique[:6])}")
+    if third_party:
+        unique = list(dict.fromkeys(third_party))
+        for relpath, lineno, spec in unique[:6]:
+            add("medium", f"Third-party GitHub Action pinned by tag/branch (pin to SHA): {spec} at {relpath}:{lineno}")
         if len(unique) > 6:
-            add("medium", f"  ... and {len(unique) - 6} more unpinned actions")
+            add("medium", f"  ... and {len(unique) - 6} more third-party actions pinned by tag/branch")
+    if first_party_files:
+        add("info", f"{len(first_party_files)} workflow(s) pin official actions/* or github/* by tag rather than SHA (low risk)")
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +436,12 @@ def main():
         check_python()
     if "go" in ecosystems:
         check_go()
+    if "rust" in ecosystems:
+        check_rust()
+    if "php" in ecosystems:
+        check_php()
+    if "ruby" in ecosystems:
+        check_ruby()
 
     check_ci_supply_chain()
 
@@ -317,11 +449,11 @@ def main():
         print("No dependency health issues found.")
         return
 
-    severity_order = {"critical": 0, "high": 1, "medium": 2}
-    issues.sort(key=lambda x: severity_order.get(x[0], 3))
+    severity_order = {"critical": 0, "high": 1, "medium": 2, "info": 3}
+    issues.sort(key=lambda x: severity_order.get(x[0], 4))
 
     for severity, msg in issues[:40]:
-        tag = {"critical": "CRITICAL", "high": "HIGH", "medium": "MEDIUM"}.get(severity, severity)
+        tag = {"critical": "CRITICAL", "high": "HIGH", "medium": "MEDIUM", "info": "INFO"}.get(severity, severity)
         print(f"  [{tag}] {msg}")
 
     total = len(issues)
