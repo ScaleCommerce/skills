@@ -14,7 +14,7 @@ skills/
 │   ├── SKILL.md                — Automated code quality analysis
 │   └── scripts/                — Dupe detection, inconsistency, complexity, security, doc-drift checks
 ├── frontend-design/
-│   └── SKILL.md                — UI design (from anthropics/skills)
+│   └── SKILL.md                — UI design (fork of anthropics/claude-code plugin, see Updating Skills)
 ├── landing-page-guide/
 │   └── SKILL.md                — Conversion-focused landing pages (Nuxt4 + NuxtUI)
 ├── nano-banana/
@@ -75,6 +75,12 @@ npx skills update
 ## Updating Skills
 
 When asked to update or improve a skill, always edit the local SKILL.md in this repo — this is the development version. Users will later install it via `npx skills add scalecommerce/skills`. Use the `/skill-creator` skill for creating, modifying, and testing skills.
+
+### Skills Forked from Upstream
+
+`frontend-design` is a fork of Anthropic's plugin at
+https://github.com/anthropics/claude-code/tree/main/plugins/frontend-design/skills/frontend-design
+with local additions (component-vocabulary consistency, Tailwind replace-don't-extend palette guidance, banned AI-copy register, pushier trigger description, kept banned-fonts and background-technique lists). Upstream is actively maintained and rewrites this skill periodically — when syncing, fetch the upstream SKILL.md, **merge** it with our additions, and never overwrite the local copy wholesale. Last synced: July 2026.
 
 ## Conventions
 
