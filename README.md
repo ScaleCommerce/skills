@@ -31,7 +31,7 @@ npx skills update
 
 ### landing-page-guide
 
-Build high-converting landing pages with proven conversion psychology and layout patterns. Based on testing 300+ pages, this skill guides the AI through the full workflow — from strategy (customer awareness stages, message match, psychology principles) to code (Nuxt4 + NuxtUI) to deployment. Includes mobile optimization, A/B testing priorities, page speed checklists, and AI-generated visuals via OpenRouter.
+Build high-converting landing pages with proven conversion psychology and layout patterns. Guides the AI through a six-phase workflow — strategy inputs (awareness stages, message match, offer), layout blueprint, copy rules, build (Nuxt 4 + Nuxt UI v4, form handling, GDPR/double-opt-in compliance for EU/DACH), visuals via OpenRouter, and an end-to-end launch checklist. Includes Core Web Vitals targets, mobile optimization, A/B testing priorities, and lead quality scoring. Cross-references the frontend-design and nuxt-ui skills.
 
 **Use it when:** Creating landing pages, squeeze pages, lead gen pages, optimizing conversion rates, writing landing page copy, or A/B testing page elements.
 
