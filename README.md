@@ -37,11 +37,11 @@ Build high-converting landing pages with proven conversion psychology and layout
 
 ### frontend-design
 
-Anthropic's official frontend-design skill, extended with additional best practices — guides the AI to create distinctive, production-grade interfaces that avoid generic "AI slop" aesthetics. Works in two passes: first a compact design plan (palette, type roles, layout, one signature element), self-critiqued against known AI-default looks, then implementation with a quality floor (responsive, keyboard focus, reduced motion). Includes UX-writing guidance so the copy doesn't give the page away either.
+Anthropic's official frontend-design skill, extended with additional best practices — guides the AI to create distinctive, production-grade interfaces that avoid generic "AI slop" aesthetics. Starts by looking for the design system the project already has, so new UI extends it instead of inventing a second visual language. Then works in two passes: a compact design plan (palette, type roles, layout, one signature element), self-critiqued against a checklist of current AI-design tells, then implementation with a real quality floor (responsive breakpoints, contrast ratios, focus states, reduced motion). Adds typographic mechanics, a check that the fonts it names can actually be loaded, and UX-writing guidance so the copy doesn't give the page away either.
 
 **Use it when:** Building any web UI — components, pages, dashboards, landing pages, or styling/beautifying existing interfaces.
 
-**Origin:** [anthropics/claude-code frontend-design plugin](https://github.com/anthropics/claude-code/tree/main/plugins/frontend-design), merged with our additions (component-vocabulary consistency, Tailwind palette replacement, banned AI-copy register). Included here so the team gets it automatically.
+**Origin:** [anthropics/skills frontend-design](https://github.com/anthropics/skills/tree/main/skills/frontend-design) (Apache 2.0), merged with our additions (codebase-first design-system detection, typographic mechanics, component-vocabulary consistency, Tailwind palette replacement, AI-tells checklist, accessibility floor, banned AI-copy register). Included here so the team gets it automatically.
 
 ### code-review
 

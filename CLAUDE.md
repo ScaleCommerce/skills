@@ -78,9 +78,13 @@ When asked to update or improve a skill, always edit the local SKILL.md in this 
 
 ### Skills Forked from Upstream
 
-`frontend-design` is a fork of Anthropic's plugin at
-https://github.com/anthropics/claude-code/tree/main/plugins/frontend-design/skills/frontend-design
-with local additions (component-vocabulary consistency, Tailwind replace-don't-extend palette guidance, banned AI-copy register, pushier trigger description, kept banned-fonts and background-technique lists). Upstream is actively maintained and rewrites this skill periodically — when syncing, fetch the upstream SKILL.md, **merge** it with our additions, and never overwrite the local copy wholesale. Last synced: July 2026.
+`frontend-design` is a fork of Anthropic's skill (Apache 2.0). Upstream lives in two places that carry byte-identical copies — https://github.com/anthropics/skills/tree/main/skills/frontend-design (canonical) and https://github.com/anthropics/claude-code/tree/main/plugins/frontend-design/skills/frontend-design (plugin mirror, lags the canonical repo by days). Upstream rewrites this skill periodically, so when syncing, fetch the upstream SKILL.md, **merge** it with our additions, and never overwrite the local copy wholesale. Diffing by hand is the whole job — our copy is roughly twice upstream's length and every extra paragraph is deliberate.
+
+Our additions on top of upstream: the codebase-first section (find the design system the project already has before inventing one), concrete typographic mechanics plus a loadable-font reality check, component-vocabulary consistency, Tailwind replace-don't-extend palette guidance, a checkable list of current AI-design tells, imagery guidance, an accessibility floor with actual numbers, modern-CSS pointers, persisting the token plan so the second screen inherits it, the banned AI-copy register, and a pushier trigger description. Upstream's own material is otherwise kept intact, including its voice.
+
+Two upstream lines are deliberately dropped as redundant: its standalone "consider written content carefully" pointer (the Writing section covers it) and its `LICENSE.txt` reference (we cite the upstream URL in frontmatter instead, since we don't vendor the file).
+
+Last synced: August 2026 — upstream unchanged since its 2026-06-09 rewrite (`anthropics/skills` 2235be7), verified against both locations.
 
 ## Conventions
 
