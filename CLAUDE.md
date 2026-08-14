@@ -20,6 +20,9 @@ skills/
 ├── nano-banana/
 │   ├── SKILL.md                — Image generation & editing via OpenRouter API
 │   └── scripts/nb.py           — CLI: generate, edit, balance, stats
+├── ui-overhaul/
+│   ├── SKILL.md                — UI drift audit & consolidation into a design-token system
+│   └── scripts/                — Drift scanner (scan_ui_drift.py), WCAG contrast checker (contrast.py)
 └── update-claude-md/
     └── SKILL.md                — Structured CLAUDE.md creation & maintenance
 ```

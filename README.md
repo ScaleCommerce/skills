@@ -51,6 +51,14 @@ Thorough, opinionated code review that finds real problems — not formatting ni
 
 **Works with:** All languages and frameworks.
 
+### ui-overhaul
+
+Audit and consolidate a web app's UI that grew organically. Bundled scanners measure the drift first — hardcoded colors, hand-maintained dark-mode twins (`bg-white dark:bg-zinc-900` pairs), spacing literals duplicated across files, ad-hoc font-size ladders — then the skill works in phases: establish a semantic design-token layer, migrate the markup to it, unify N spellings of one idiom into shared primitives, and run hierarchy/polish passes per surface. Every decision carries a measurement; contrast is computed with the included WCAG checker, not eyeballed. Also audits the project's own design rules (CLAUDE.md / AGENTS.md) and guard tests in both directions — too strict (rules that veto design ideas) or too loose (rules that sound binding but catch nothing).
+
+**Use it when:** Cleaning up inconsistent UI or styling, extracting design tokens from hardcoded values, "the UI is a mess" / "every screen looks different" requests, painful dark-mode maintenance, consolidating duplicate components, or checking whether a project's design rules and guard tests help or hurt.
+
+**Works with:** Tailwind projects first-class (any framework); includes plain-CSS guidance.
+
 ### nano-banana
 
 Generate and edit images using the OpenRouter API with the Nano Banana model (Gemini 3.1 Flash Image). Includes a Python CLI (`scripts/nb.py`) that handles the full flow — prompt enrichment, API calls, base64 decoding, and file output — in a single command. Supports text-to-image generation, image editing (background removal, style transfer, element changes), batch variations, aspect ratios, and resolution control.
@@ -81,6 +89,9 @@ skills/
 ├── nano-banana/
 │   ├── SKILL.md
 │   └── scripts/        # CLI wrapper (nb.py)
+├── ui-overhaul/
+│   ├── SKILL.md
+│   └── scripts/        # UI drift scanner, WCAG contrast checker
 ├── update-claude-md/
 │   └── SKILL.md
 └── your-new-skill/
