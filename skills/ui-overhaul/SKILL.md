@@ -1,6 +1,6 @@
 ---
 name: ui-overhaul
-description: "Audit and consolidate a web app's UI: measure visual drift (hardcoded colors, ad-hoc font sizes, duplicated spacing literals, hand-maintained dark-mode twins, N spellings of one component), establish a semantic design-token layer, migrate the markup to it, unify duplicated UI into shared primitives, and run hierarchy and polish passes per surface. Also audits the project's own design rules (CLAUDE.md / AGENTS.md) and guard tests in both directions — too strict (rules that veto design ideas) or too loose (rules that sound binding but catch nothing). Use this skill whenever the user wants to clean up, unify, or systematize an app's UI, design, or styling — phrases like 'make the design consistent', 'the UI is a mess', 'every screen looks different', 'clean up the frontend', 'extract a design system', 'design tokens', 'dark mode is painful to maintain', 'UI audit', 'consolidate components', 'make it look professional', or 'polish pass' — and when they ask whether their design rules or guard tests have gone too far or aren't pulling their weight. Also trigger when a restyle or redesign request reveals organic growth (many one-off styles) rather than one bad screen. Works best on Tailwind projects; includes guidance for plain CSS."
+description: "Audit and consolidate a web app's UI: measure visual drift (hardcoded colors, ad-hoc font sizes, duplicated spacing literals, hand-maintained dark-mode twins, N spellings of one component, inconsistent or doubled focus rings and hover states), establish a semantic design-token layer, migrate the markup to it, unify duplicated UI into shared primitives, and run hierarchy and polish passes per surface. Also audits the project's own design rules (CLAUDE.md / AGENTS.md) and guard tests in both directions — too strict (rules that veto design ideas) or too loose (rules that sound binding but catch nothing). Use this skill whenever the user wants to clean up, unify, or systematize an app's UI, design, or styling — phrases like 'make the design consistent', 'the UI is a mess', 'every screen looks different', 'clean up the frontend', 'extract a design system', 'design tokens', 'dark mode is painful to maintain', 'UI audit', 'consolidate components', 'make it look professional', 'polish pass', 'the focus ring looks wrong', or 'hover behaves differently on every screen' — and when they ask whether their design rules or guard tests have gone too far or aren't pulling their weight. Also trigger when a restyle or redesign request reveals organic growth (many one-off styles) rather than one bad screen. Works best on Tailwind projects; includes guidance for plain CSS."
 ---
 
 # UI Overhaul Skill
@@ -30,19 +30,24 @@ Take a UI that grew organically and consolidate it into one that reads as design
    python3 <skill-path>/scripts/scan_ui_drift.py <src-dir>          # human-readable
    python3 <skill-path>/scripts/scan_ui_drift.py <src-dir> --json   # full site lists
    ```
-   This measures: raw palette utilities bypassing tokens, hand-maintained dark twins, arbitrary values duplicated across files, the inline font-size ladder, tracking values, raw shadows, and hex colors in CSS. Read the flagged sites before reporting — counts are signal, not verdicts.
+   This measures: raw palette utilities bypassing tokens, hand-maintained dark twins, arbitrary values duplicated across files, the inline font-size ladder, tracking values, raw shadows, hex colors in CSS, and — the only section that is not about appearance at rest — interactive state: the spellings of each hover/focus property, sites that opt out of the focus system, and transitions that name only colors while a state also moves a shadow or transform. Read the flagged sites before reporting — counts are signal, not verdicts.
 
 2. **Read the foundation:** the main stylesheet, Tailwind/theme config, and the component library's theme config (e.g. `app.config.ts` for Nuxt UI). Is there a token layer at all? Is it used? Does the component library's dark theme collapse distinct tokens onto identical values? (Nuxt UI's dark defaults map `bg-muted`, `bg-elevated`, and `border` to one color — borders drawn in the surface's own color are invisible, and `hover:bg-elevated` on `bg-muted` is a 0-delta hover. Check with `getComputedStyle`, not by reading the docs.)
 
 3. **Inventory the idioms.** Grep for repeated UI patterns and count the spellings: section labels (how many combinations of size/weight/uppercase/tracking say "this is a section"?), page headers, empty states, avatars, field rows, menus, hand-rolled buttons next to library buttons. Five spellings of one idiom is one component waiting to exist.
 
-4. **Look at it.** Open the running app (browser tools) in both color modes at realistic data density. Screenshot the main surfaces. Note: invisible borders, 0-delta hovers, focus rings (tab through a form), hierarchy failures (can you tell a title from its metadata at arm's length?), and any element that lights up on hover but does nothing when clicked.
+4. **Inventory the states, the same way.** Hover, focus, active and disabled drift exactly like colors do — N spellings of one thing, maintained per call site — and nothing in a static reading of the markup shows it. Three questions, in this order:
+   - **Where is each state declared, and which layer wins?** This is the one that hides. A global rule that is unlayered or `!important` overrides every component's own decision *and every opt-out written against it without the same weight* — so those opt-outs are dead code that still reads as deliberate, and the component's considered choice never renders. Check with `getComputedStyle` on a real focused element, not by reading the rules. Symptoms: two concentric focus rings (the library's own plus the global one), a component that sets `focus:outline-none` on purpose and gets a ring anyway, a `border-radius` in a global focus rule *mutating the element* so round controls square off.
+   - **How many spellings does one state have on one kind of object?** Two different hovers for two kinds of card is drift; a card and a menu item legitimately differ. Group by object, not by file.
+   - **Which interactive things have no state at all?** Tab through every field on a form, not one. The scan cannot see absence, and "the fields nobody styled" is a real cluster — often the plain ones inside a row or a shell.
 
-5. **Spot-check contrast** with `contrast.py` on the real pairs found in steps 2–4.
+5. **Look at it.** Open the running app (browser tools) in both color modes at realistic data density. Screenshot the main surfaces. Note: invisible borders, 0-delta hovers, hierarchy failures (can you tell a title from its metadata at arm's length?), and any element that lights up on hover but does nothing when clicked.
 
-6. **Audit the rule system itself** — CLAUDE.md / AGENTS.md design sections, guard tests, custom lint rules (see "Auditing the rule system" below). The drift scan is the cross-check in both directions: a loud scan under strict-sounding rules means the rules aren't actually enforced; a quiet scan plus a history of design work stalling against green tests means they're a cage.
+6. **Spot-check contrast** with `contrast.py` on the real pairs found in steps 2–5.
 
-7. **Write the report** (format below) and stop for approval of the phased plan. On explicit "just fix it" instructions, present the summary numbers and proceed.
+7. **Audit the rule system itself** — CLAUDE.md / AGENTS.md design sections, guard tests, custom lint rules (see "Auditing the rule system" below). The drift scan is the cross-check in both directions: a loud scan under strict-sounding rules means the rules aren't actually enforced; a quiet scan plus a history of design work stalling against green tests means they're a cage.
+
+8. **Write the report** (format below) and stop for approval of the phased plan. On explicit "just fix it" instructions, present the summary numbers and proceed.
 
 ### Phase 1 — The token layer
 
@@ -66,7 +71,7 @@ Mechanical, batched by family, and free of design changes:
 
 ### Phase 3 — Consolidate primitives
 
-- **One component per idiom.** For each multi-spelling idiom from the audit: build (or adopt) one primitive, migrate every call site, and let the consolidation *reveal* the drift — five section-label spellings at four letter-spacings only become "these are the same thing" once they're one component. Consolidate first, retune second.
+- **One component per idiom — but a different shape is not another spelling.** For each multi-spelling idiom from the audit: build (or adopt) one primitive, migrate every call site, and let the consolidation *reveal* the drift — five section-label spellings at four letter-spacings only become "these are the same thing" once they're one component. Consolidate first, retune second. The counterpart to "the second file is the defect" applies here: before collapsing a set, separate the members that differ by *history* from the ones that differ by *shape*. A field that reads as text until you click it, or that sits chrome-less inside a row because its container draws the boundary, is not a boxed input spelled differently — forcing it into the library component means stripping that component's ring, padding and radius back off, and the plain element was the simpler thing all along. Consolidate the historical half; document where the line falls and why.
 - **Prefer the component library's own primitives** before hand-rolling — check what it actually ships (empty states, user rows, keyboard hints, dashboard shells) before building a private version.
 - **User-chosen / stored colors** (tags, statuses, avatars) need a correction recipe, not raw application: set the *lightness* in CSS and keep the user's hue (`oklch(from var(--swatch) L c h)`). Mixing toward black/white cannot fix a dark stored hex — the output lightness depends on the input's. One recipe, verified with `contrast.py` across the actual offered palette, in both modes.
 - Derived identity color (avatar tints from names) beats N identical grey discs on any surface where several people appear.
@@ -77,6 +82,7 @@ With the vocabulary in place, polish each key surface (main view, detail view/pa
 
 - **One focal point per surface**; type size/weight express the hierarchy; everything aligns to a shared inset.
 - **Honest affordances**: only interactive things light up on hover. Compute the hover delta — a sub-1% lightness change is a rendering fault, not a hover state.
+- **One treatment per kind of object, states included.** Correctness is not enough: two hovers that are both honest, both visible and different is still drift, and it is the kind a static scan cannot see. Settle it by asking what the treatment *spends* rather than which looks nicer — a hover that tints the border and title with the brand color spends saturation on a pointer position, which the saturation budget reserves for data; one that lifts and steps the border a neutral notch spends motion instead, and can also answer the click with an `:active` press. Whichever wins, apply it to every member of the class in the same pass and grep for the stragglers — a create-tile or an empty slot may legitimately keep its own highlight, as a written-down exception.
 - **Empty states are invitations**: the affordance to add the first item, not a sentence reporting absence. A heading over a void is worse than no heading.
 - **Metadata is quieter than content**: a byline smaller than the text it introduces; timestamps behind tooltips carrying the exact moment; action buttons quiet at rest, reachable by keyboard (`focus-within`).
 - Density is a feature in a work tool — tighten toward the data, not toward whitespace for its own sake.
@@ -103,6 +109,11 @@ sizes, raw shadows — each with the worst offenders]
 
 ## Idiom inventory
 [N spellings of X → one component; the concrete spellings found]
+
+## State drift
+[Per state: where it is declared and which layer wins; spellings per kind of
+object; interactive things with no state at all; focus opt-outs and how many of
+them the cascade makes dead]
 
 ## Dark mode debt
 [Collapsed token steps, hand-maintained twins, invisible borders/hovers]

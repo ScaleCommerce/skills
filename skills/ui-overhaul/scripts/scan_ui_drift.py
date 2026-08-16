@@ -13,8 +13,16 @@ for the five kinds of drift that accumulate in a Tailwind codebase:
   4. Inline font sizes (text-[13px], font-size: 13px) — the size ladder that
      grew instead of being decided.
   5. Raw shadow steps and hex colours in CSS — per-mode values with no token.
+  6. Interactive state: how many spellings of hover/focus there are, how many
+     sites opt out of the focus system, and transitions that name only colours
+     while a state also moves a shadow or a transform (so that half snaps).
 
 Counts are signal, not verdicts: read the flagged sites before acting on them.
+
+Checks 1-5 all measure appearance *at rest*. Check 6 exists because a UI drifts
+just as hard in its states, and none of the others can see it: a codebase can
+scan clean while every input draws two focus rings, half the opt-outs written
+against a global rule are dead code, and one kind of card has two hovers.
 
 Usage:  python3 scan_ui_drift.py [path] [--json]
 """
@@ -51,6 +59,34 @@ SHADOW_COLOURED = re.compile(
     r'(?:[\w-]+:)*\bshadow-(?:' + '|'.join(TAILWIND_FAMILIES) + r')-\d{2,3}(?:/\d+)?\b'
 )
 
+# ── Interactive state ──────────────────────────────────────────────────────────
+STATE_VARIANTS = r'(?:group-|peer-)?(?:hover|focus|focus-visible|focus-within|active)'
+# A state that paints: grouped by the property it moves, so the report can say
+# "N spellings of hover-border" the way it says "N distinct font sizes".
+STATE_PAINT = re.compile(
+    r'\b(' + STATE_VARIANTS + r'):(?:before:|after:)?'
+    r'(border|ring|outline|shadow|bg|text|opacity|translate|scale)([\w./\[\]-]*)'
+)
+# Opting out of the focus system. Counted separately because the number is the
+# whole finding: it measures how many places fought the global rule — and a
+# `!`-flagged one means the global rule was strong enough to need overriding.
+#
+# `outline-*` counts bare, because an outline is only ever visible on focus.
+# `ring-0` does not: at rest it is how a component says "no ring", and only a
+# state prefix or a `!` makes it a focus opt-out. Counting it bare reports every
+# ghost-variant button as a suppressor.
+FOCUS_SUPPRESSOR = re.compile(
+    r'\b(?:(?:' + STATE_VARIANTS + r':)(outline-none!?|ring-0!?|outline-hidden)'
+    r'|(outline-none!?|outline-hidden)|(ring-0!))\b'
+)
+# `transition-colors` moves colour/background/border/fill/stroke and nothing
+# else. Pair it with a state that also moves a shadow or a transform and that
+# half of the transition snaps on instead of easing.
+TRANSITION_COLORS = re.compile(r'\btransition-colors\b')
+NON_COLOUR_STATE = re.compile(
+    r'\b' + STATE_VARIANTS + r':(shadow-|translate-|scale-|rotate-|opacity-)'
+)
+
 
 def blank_comments(text: str, is_markup: bool) -> str:
     """Blank comments but keep line numbers, so prose about a bad class
@@ -84,6 +120,9 @@ def main() -> None:
     trackings = defaultdict(lambda: defaultdict(int))   # value -> file -> count
     raw_shadows = []            # (file, line_no, utility)
     css_hexes = defaultdict(lambda: defaultdict(int))   # hex -> file -> count
+    state_paint = defaultdict(lambda: defaultdict(int))  # property -> utility -> count
+    focus_optouts = []          # (file, line_no, utility)
+    snapped = []                # (file, line_no, [properties that snap])
     files_scanned = 0
 
     for path, is_markup in walk(root):
@@ -118,6 +157,21 @@ def main() -> None:
             if not is_markup or 'style=' in line:
                 for m in HEX_IN_CSS.finditer(line):
                     css_hexes[m.group(0).lower()][rel] += 1
+            for m in STATE_PAINT.finditer(line):
+                state_paint[m.group(2)][m.group(0)] += 1
+            for m in FOCUS_SUPPRESSOR.finditer(line):
+                focus_optouts.append((rel, i, m.group(1) or m.group(2) or m.group(3)))
+
+        # Per class attribute rather than per line: a class string often wraps,
+        # and `transition-colors` and the state it fails to cover land on
+        # different lines when it does.
+        for m in re.finditer(r'class(?:Name)?=["\']([\s\S]*?)["\']', text):
+            attr = m.group(1)
+            if not TRANSITION_COLORS.search(attr):
+                continue
+            missed = sorted({g.rstrip('-') for g in NON_COLOUR_STATE.findall(attr)})
+            if missed:
+                snapped.append((rel, text[:m.start()].count('\n') + 1, missed))
 
     shared_arbitrary = {u: files for u, files in arbitrary.items() if len(files) > 1}
 
@@ -139,6 +193,12 @@ def main() -> None:
             'raw_shadows': [
                 {'file': f, 'line': l, 'utility': u} for f, l, u in raw_shadows],
             'hex_colours_in_css': {h: dict(files) for h, files in css_hexes.items()},
+            'state_treatments': {
+                prop: dict(utils) for prop, utils in state_paint.items()},
+            'focus_optouts': [
+                {'file': f, 'line': l, 'utility': u} for f, l, u in focus_optouts],
+            'snapped_transitions': [
+                {'file': f, 'line': l, 'properties': p} for f, l, p in snapped],
         }, indent=2))
         return
 
@@ -200,6 +260,41 @@ def main() -> None:
     print(f'HEX COLOURS IN CSS / style=: {len(css_hexes)} distinct')
     for h, files in sorted(css_hexes.items(), key=lambda x: -sum(x[1].values()))[:15]:
         print(f'  {h:9}  {sum(files.values())} sites / {len(files)} files')
+
+    print()
+    total_state = sum(sum(u.values()) for u in state_paint.values())
+    print(f'INTERACTIVE STATE: {total_state} painted state sites, '
+          f'{sum(len(u) for u in state_paint.values())} distinct spellings')
+    print('The same ladder as font sizes, one property at a time. Two spellings')
+    print('of one property on one kind of object is drift, not variety — ask what')
+    print('object each belongs to before collapsing them.')
+    for prop, utils in sorted(state_paint.items(), key=lambda x: -len(x[1])):
+        if len(utils) < 2:
+            continue
+        top = sorted(utils.items(), key=lambda x: -x[1])[:4]
+        print(f'  {prop:9} {len(utils):3} distinct  '
+              + ', '.join(f'{u} ({n})' for u, n in top)
+              + (' …' if len(utils) > 4 else ''))
+
+    print()
+    print(f'FOCUS OPT-OUTS: {len(focus_optouts)} sites across '
+          f'{len({f for f, _, _ in focus_optouts})} files')
+    print('Each fought a global focus rule. Check which layer that rule sits in')
+    print('before trusting them: an unlayered or !important global beats a plain')
+    print('utility whatever its specificity, so opt-outs written without the same')
+    print('weight are dead code that still reads as deliberate.')
+    for f, l, u in focus_optouts[:10]:
+        print(f'  {f}:{l}  {u}')
+    if len(focus_optouts) > 10:
+        print(f'  … and {len(focus_optouts) - 10} more')
+
+    print()
+    print(f'SNAPPED TRANSITIONS: {len(snapped)} sites declare `transition-colors`')
+    print('while a state also moves a shadow or a transform — that half jumps.')
+    for f, l, props in snapped[:10]:
+        print(f'  {f}:{l}  also moves {", ".join(props)}')
+    if len(snapped) > 10:
+        print(f'  … and {len(snapped) - 10} more')
 
     print()
     print('=' * 72)
