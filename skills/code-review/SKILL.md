@@ -19,6 +19,10 @@ Perform a thorough, opinionated code review of a project or set of files. The go
 
 **Verify before you report.** No finding goes into the report unless you have read the actual code at that location and confirmed the problem yourself. The bundled scripts and even dedicated tools produce false positives; a report containing one wrong "critical" finding loses the reader's trust in all the correct ones. If you cannot confirm something but still think it's worth mentioning, label it explicitly as unverified.
 
+**A clearance is a claim too.** "Handled correctly", "no issues in this area", "this path is safe" are assertions about the code, and they are the ones a reader acts on by *not looking*. So they take the same bar as an accusation: having read the file is what earns them, and where you didn't, write that the area is uncovered rather than that it is fine. This is the direction the rule above misses on its own — a false positive costs the reader one wasted check, a false all-clear costs them the bug, and it is the easier mistake to make because nobody comes back to argue with it. The shape to watch for is a sibling comparison you only half-verified: two delete paths, one demonstrably cleaning up after itself, and the conclusion that therefore both do.
+
+**Two bars, not one — and conflating them is the quiet failure mode.** Collecting suspicions is cheap and should be greedy: a candidate you dismiss in thirty seconds cost thirty seconds, while one you never generated is invisible forever. Promoting a suspicion to a *finding* is where the bar above applies. So scan and hypothesise liberally, challenge each candidate before it reaches the report, and where something deserves the reader's attention but you could not settle it, keep it and say which part is unconfirmed. Dropping an observation because you weren't certain is the only outcome with no recovery — and certainty is often unavailable for the questions that matter most, because the answer lives in what the product intends rather than in the code.
+
 ## Review Process
 
 ### Step 1: Understand the Project
@@ -136,6 +140,12 @@ python3 <skill-path>/scripts/check_deps.py
 python3 <skill-path>/scripts/check_docs.py
 ```
 
+**Cascade Map** — every `parent -> child` delete cascade and each root's *transitive* radius, resolved from raw SQL and from ORM DSLs without per-ORM parsing. Unlike the scans above this is worth running on a small codebase too, because the thing it computes is assembled across a schema file and a directory of migrations rather than being visible anywhere. It prints a map, not findings — see Destructive Operations & Blast Radius for what to do with it.
+
+```bash
+python3 <skill-path>/scripts/check_cascades.py
+```
+
 ### Step 3: Deep Security Review (Agent-Driven)
 
 This is where you earn your keep. Whether the scripts surfaced candidates or you read the code directly (for smaller projects), now you think like an attacker. The most dangerous vulnerabilities are the ones no regex can catch: logic flaws, missing authorization checks on specific routes, race conditions between concurrent operations, or data flowing from user input through three function calls before hitting an unsafe sink.
@@ -239,6 +249,23 @@ When you identify a framework opportunity, frame it as a strategic suggestion wi
 - Are there race conditions in concurrent code?
 - Are database transactions used where multiple writes need to be atomic?
 
+#### Destructive Operations & Blast Radius
+
+The code that destroys the most data is usually the code that looks most harmless. `db.delete(status)` is one line; that it also deletes every card filed under that status is one word in a foreign-key declaration in a *different file*. The handler, its API description and its confirmation dialog can each be written, read and reviewed without anyone seeing it — nothing at the call site is red.
+
+Locating the declarations needs no instructions — grep the word `cascade` alongside a destruction verb, read the schema, and the ORM ones fall out. What no grep gives you is the *radius*, because it is assembled from a schema file plus a directory of migrations: run `python3 <skill-path>/scripts/check_cascades.py` for the parent→child map with each root's transitive reach (`organizations → 23 tables`, `statuses → 6`). It prints a map, not findings, and says so — reviewing the edges is the work below. Everything below is the part that gets skipped: **a cascade inventory is not a review.** Every entry may be intended; the work is deciding which ones aren't, and the same questions apply to the destructive verbs that carry no declaration at all — bulk deletes (`deleteMany`, `delete_all`, `DELETE FROM … WHERE`), `TRUNCATE`, `rm -rf`, blob/bucket cleanup, and the hand-written cleanup a document store leaves you to do yourself.
+
+Whether a given cascade is *intended* is usually not answerable from the code — so don't wait to be sure. State the radius, say it looks disproportionate to what the caller was told, and let it be challenged. A neutral list of cascades reads as an all-clear even when it contains the defect.
+
+- **The dangerous shape is a cascade from a classifier into content.** A status, label, category, folder, team or tag is a way of *organising* things the user considers their own, and deleting the label should not delete what was filed under it. A cascade from content into its own detail rows — an order and its line items, a card and its comments — is expected and usually right. That distinction is what turns fifty grep hits into one finding.
+- **Follow the chain, not the edge.** Radius is transitive and the declaration states one hop: a status deletes its cards, and the cards take their comments and attachments with them. The file performing the delete states none of it, so the number worth reporting — "this destroys rows in six tables" — exists in no single place.
+- **Compare the radius to what the caller was told.** "Delete this status?", `deleteStatus()`, and a doc reading "deletes a status" are all consent for the smaller act. If children die too they have to be named where the decision is made, with a count. A one-click confirmation on an action that destroys unnamed records is a finding by itself.
+- **Check the guard is server-side, and that a test would notice.** A UI-only confirmation is bypassed by the same endpoint from the API, the CLI or a script. And because the deletion is invisible at the call site, only a test that counts the child rows *after* the call can hold the behaviour — which is why complexity-ranked test-gap lists never nominate the four-line delete handler that matters most.
+- **Flag the mirror image too**: no cascade and no cleanup, leaving orphaned rows, dangling references, or files and blobs that outlive the record they belonged to. Where one delete path cleans up and its sibling doesn't, the sibling is the finding.
+- **Two things that look like answers and aren't.** `ON DELETE RESTRICT ON UPDATE CASCADE` is not a delete cascade — the cascade governs key updates, and a whole migration file of them means nothing. And *no declarations found* is not an all-clear: a document store has no cascade syntax, so child cleanup there is application code or missing, and a framework's own cascades sit in `vendor/` — outside your review scope, not outside your users' data.
+
+Rate these Critical when an ordinary user action triggers them — data loss, per the rubric above. The fix to recommend is usually not a scarier dialog but a smaller operation: reassign, unlink, or refuse until the children are moved. Note that the FK cascade itself normally has to stay (deleting the whole project *should* take its cards, and the DB often gives no ordering guarantee between two paths to the same row), so the guard belongs in the handler, not in the schema.
+
 #### Naming & Readability
 - Can you understand what a function does from its name?
 - Are there misleading names (function called `getUser` that also modifies state)?
@@ -268,6 +295,7 @@ The scripts can't detect these — but you can by reading the code with understa
 - **Missing business logic**: An e-commerce checkout with no stock validation, a rate limiter that resets on server restart, a password reset flow with no expiry
 - **Data flow vulnerabilities**: User input that passes through 3 clean-looking functions before reaching an unsafe sink — no single line looks dangerous, but the chain is
 - **Implicit coupling**: Two modules that work because they both assume the same database state, but nothing enforces this — a change to one will silently break the other
+- **Debt the code admits to**: comments that hedge about the behaviour they sit on — "this is probably too weak for what it does", "left as-is", "we should really", "not sure why this works" — are the codebase's own bug list, and `find_inconsistencies.py` only counts `TODO`/`FIXME` markers, so the prose ones are invisible to it. Read them as candidate findings and check whether what they worry about is still true
 - **Framework misuse specific to this project**: Not generic anti-patterns (those are above), but ways this particular codebase misuses its own abstractions
 
 When you find something the scripts missed, that's the highest-value part of your review. Call it out clearly.

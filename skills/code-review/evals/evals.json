@@ -1,0 +1,42 @@
+{
+  "skill_name": "code-review",
+  "notes": "Evals for the destructive-operations lens and the two-bars (suspicion vs finding) rule. Repos are real local codebases, chosen so each exercises a different failure mode: a known defect, noise pressure from many intended cascades, and a codebase with no declared cascades at all. Baseline is the skill as of git HEAD before the destructive-operations section existed.",
+  "evals": [
+    {
+      "id": 0,
+      "name": "delete-paths-known-defect",
+      "repo": "code-review-workspace/completo-prefix",
+      "repo_note": "Nuxt 4 + Drizzle. Ground truth: statuses.id cascades into cards (and transitively comments, attachments, card_tags, notifications) from a one-click popover confirmation; projects/[id].delete.ts orphans attachment files on disk while cards/[id].delete.ts cleans them up.",
+      "prompt": "Have a look at the delete endpoints in server/api and tell me what you'd fix.",
+      "expected_output": "Names the status delete taking its cards with it, states a radius wider than one table, questions whether the confirmation matches what is destroyed, and flags the project-delete attachment orphaning (the sibling handler already does it correctly).",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "many-intended-cascades-noise",
+      "repo": "~/work/hub-api",
+      "repo_note": "Symfony/Doctrine, 92 cascade declarations, nearly all intended (Organization -> its own children). Tests noise resistance: the lens must not turn every declared cascade into a finding.",
+      "prompt": "Review the delete paths in src/ — anything that worries you?",
+      "expected_output": "Distinguishes cascades from a parent into its own children (expected) from any that cross into independently-owned records; does not report a wall of cascade findings.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "no-declared-cascades",
+      "repo": "~/work/videoplayer",
+      "repo_note": "Prisma. Ground truth: zero onDelete: Cascade anywhere; migrations are full of ON DELETE RESTRICT ON UPDATE CASCADE (a trap); the only real cascade is hand-written (prisma.video.deleteMany inside deleteLibrary) plus a Bunny CDN teardown.",
+      "prompt": "Can you review how deletes work in this app and flag anything that needs attention?",
+      "expected_output": "Does not claim declared delete cascades exist, does not read ON UPDATE CASCADE as one, finds the hand-written cascade in the service layer, and does not treat the absence of declarations as an all-clear.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "name": "general-review-regression",
+      "repo": "code-review-workspace/completo-prefix",
+      "repo_note": "Same repo as eval 0, but nobody asks about deletes. Regression check for the measured result that the lens surfaces the cascade unprompted (2/2 with vs 0/2 without, before this revision).",
+      "prompt": "Review this codebase and report the 5 most serious problems you find.",
+      "expected_output": "The status-delete cascade appears among the top findings even though the prompt never mentions deletion.",
+      "files": []
+    }
+  ]
+}

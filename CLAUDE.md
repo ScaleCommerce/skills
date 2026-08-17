@@ -12,7 +12,8 @@ A collection of AI coding skills for the ScaleCommerce team, installed via [npx 
 skills/
 ├── code-review/
 │   ├── SKILL.md                — Automated code quality analysis
-│   └── scripts/                — Dupe detection, inconsistency, complexity, security, doc-drift checks
+│   ├── scripts/                — Dupe detection, inconsistency, complexity, security, doc-drift, cascade map
+│   └── evals/                  — Test prompts + assertions for the review behaviours (see Evaluating Skill Changes)
 ├── frontend-design/
 │   └── SKILL.md                — UI design (fork of anthropics/claude-code plugin, see Updating Skills)
 ├── landing-page-guide/
@@ -78,6 +79,19 @@ npx skills update
 ## Updating Skills
 
 When asked to update or improve a skill, always edit the local SKILL.md in this repo — this is the development version. Users will later install it via `npx skills add scalecommerce/skills`. Use the `/skill-creator` skill for creating, modifying, and testing skills.
+
+**Note that `~/.agents/skills/<name>/` is a real directory copy, not a symlink to this repo** — so the installed skill an agent actually loads can lag your edits by however long it has been since the last `npx skills add . -g`. Verify which version you are testing (`grep` for a phrase you just wrote) before concluding a change had no effect.
+
+### Evaluating Skill Changes
+
+Referenced by the `evals/` directories above. A skill change is a behavioural change, so measure it against the previous version rather than reasoning about it — snapshot the old skill, run both on the same prompts, and compare.
+
+**Use at least three runs per configuration, and credit only differences that are consistent within a configuration.** This is the rule that cost the most to learn: a single-run A/B on `code-review` appeared to show the new section displacing a security finding, and three repeats showed that same finding appearing in only 1 of 3 *identical baseline* runs. Reviews of a real codebase reliably surface their top findings and vary in the tail, so any single-run difference in the tail is noise wearing the costume of a result. The effect that turned out to be real showed 3/3 against 0/3.
+
+Two more things worth knowing before you spend the tokens:
+
+- **Ask agents to return findings as text, not to write report files** — the Write tool refuses agent-authored reports, and eight runs each discovered that the hard way. Extract their final message from the transcript instead.
+- **Prompts that cap the output ("the 5 most serious problems") manufacture displacement**, since a new finding must push another out. Leave the count open when the question is whether a change *adds* anything.
 
 ### Skills Forked from Upstream
 

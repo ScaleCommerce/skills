@@ -47,6 +47,8 @@ Anthropic's official frontend-design skill, extended with additional best practi
 
 Thorough, opinionated code review that finds real problems — not formatting nits. Runs automated scans (duplicate detection, inconsistency checks, complexity analysis, security patterns, documentation drift) then does a manual architecture and quality review. Produces a prioritized report grouped by severity: critical issues, architecture concerns, documentation drift, code quality, and what's actually done well.
 
+One pass no scanner covers: tracing every destructive operation to its real **blast radius**. A cascade delete is declared as one word in the schema and fires from a handler that shows no sign of it, so the confirmation dialog, the API description and the function name can all describe the smaller act truthfully while the call destroys records nobody named. The bundled cascade mapper assembles the `parent → child` graph and each root's transitive reach (`organizations → 23 tables`) from raw SQL and ORM declarations alike — a number that exists in no single file — and the skill then asks the questions a list of cascades doesn't answer: is this one crossing from a label into the content filed under it, and does the confirmation say what actually dies.
+
 **Use it when:** Reviewing a codebase, auditing code quality, finding duplicates, checking for anti-patterns, hunting tech debt, or any "take a look at my code and tell me what's wrong" request.
 
 **Works with:** All languages and frameworks.

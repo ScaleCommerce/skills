@@ -33,3 +33,9 @@ skills-lock.json
 .vibe/
 .windsurf/
 .zencoder/
+
+# skill eval workspaces (scratch; evals/ inside each skill is committed)
+code-review-workspace/
+
+# python bytecode from running the bundled scripts
+__pycache__/
