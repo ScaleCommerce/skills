@@ -93,6 +93,8 @@ Two more things worth knowing before you spend the tokens:
 - **Ask agents to return findings as text, not to write report files** — the Write tool refuses agent-authored reports, and eight runs each discovered that the hard way. Extract their final message from the transcript instead.
 - **Prompts that cap the output ("the 5 most serious problems") manufacture displacement**, since a new finding must push another out. Leave the count open when the question is whether a change *adds* anything.
 
+A bundled script is different: it has a right answer, so it gets fixtures instead of eval runs. `code-review/scripts/test_find_complexity.py` holds the measurements that were once wrong (`python3 test_find_complexity.py`) — run it after touching that script, and add a case whenever a review has to debunk a number the tooling produced.
+
 ### Skills Forked from Upstream
 
 `frontend-design` is a fork of Anthropic's skill (Apache 2.0). Upstream lives in two places that carry byte-identical copies — https://github.com/anthropics/skills/tree/main/skills/frontend-design (canonical) and https://github.com/anthropics/claude-code/tree/main/plugins/frontend-design/skills/frontend-design (plugin mirror, lags the canonical repo by days). Upstream rewrites this skill periodically, so when syncing, fetch the upstream SKILL.md, **merge** it with our additions, and never overwrite the local copy wholesale. Diffing by hand is the whole job — our copy is roughly twice upstream's length and every extra paragraph is deliberate.

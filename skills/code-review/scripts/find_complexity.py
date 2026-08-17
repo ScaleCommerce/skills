@@ -3,10 +3,17 @@
 Find complexity hotspots: large files, long functions, cyclomatic complexity,
 cognitive complexity, excessive parameters, and deep nesting.
 
-Heuristic, not a parser. Known limitations: nested functions split their
-parent's span; a function's span ends at the next function declaration.
-Numbers are indicative — treat flagged functions as candidates to read,
-not as precise metrics.
+Heuristic, not a parser, but the spans are measured rather than guessed: a
+function ends where its own delimiters balance (brace languages) or where its
+body dedents (Python). It used to end at the next *declaration*, which handed
+every Vue SFC's last function the entire template — a 16-line handler reported
+as 444 lines, with the template's branches counted as its complexity.
+
+Known limitations: a nested function still splits its parent's span in brace
+languages (Python keeps both); an unbalanced delimiter inside a block comment
+misleads the scan; a Python multi-line string starting at column 0 reads as a
+dedent. Numbers are indicative — treat flagged functions as candidates to read,
+not as precise metrics. `test_find_complexity.py` holds the fixtures.
 """
 import os
 import re
@@ -57,7 +64,11 @@ STATEMENT_KEYWORDS = (
 _STRING_RE = re.compile(
     r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`"
 )
-_LINE_COMMENT_RE = re.compile(r"//.*$|#.*$")
+# `(?<!\\)` keeps a regex literal's own closing slash from reading as a comment:
+# in `.replace(/\/\*[\s\S]*?\*\//g, blankLines)` the `\/` + `/` pair looks exactly
+# like `//`, and stripping from there deleted the `)` that balances the call — a
+# six-line function then measured 98, since nothing closed it.
+_LINE_COMMENT_RE = re.compile(r"(?<!\\)//.*$|#.*$")
 
 
 def strip_noise(line):
@@ -190,6 +201,57 @@ def function_patterns(language):
     ]
 
 
+def _close_function(current, lines, end_idx):
+    """Finish `current`, whose body ends before `end_idx`, ignoring trailing
+    non-code lines.
+
+    A function's span otherwise runs to the next declaration or to EOF, and in a
+    Vue/Svelte SFC that means the last function in `<script setup>` claims the
+    entire template and stylesheet: a 16-line keydown handler was reported as 444
+    lines, and its cyclomatic complexity was attributed to a body it does not
+    have. `vue_script_lines` blanks those lines to keep line numbers stable, so
+    trimming blanks off the end is all that is needed — it also handles an SFC
+    with two script blocks, where the gap between them is blank for the same
+    reason.
+    """
+    span = lines[current.start_line - 1:end_idx]
+
+    # Cut where the declaration's own delimiters balance. Ending a span at "the
+    # next declaration" overstates every function followed by top-level
+    # statements — an SFC script is mostly `watch(...)`/`computed(...)` calls,
+    # which match no declaration pattern, so a 16-line handler measured 444 lines
+    # (the whole template) and still measured 39 once the template was excluded.
+    #
+    # All three delimiter families count, not just braces, because an expression
+    # body has no braces to close: `const shown = computed(() => a && b)` balances
+    # on its own line, where brace-only tracking never closes it and hands it
+    # everything up to the next declaration. Block comments holding an unbalanced
+    # delimiter can still fool this, as they can fool the nesting analysis.
+    depth, opened, cut = 0, False, None
+    for n, raw in enumerate(span):
+        for ch in strip_noise(raw):
+            if ch in "([{":
+                depth += 1
+                opened = True
+            elif ch in ")]}":
+                depth -= 1
+        if opened and depth <= 0:
+            cut = n + 1
+            break
+    if cut is not None:
+        span = span[:cut]
+
+    # Nothing balanced at all (a bare `=> value` continuation, or a construct this
+    # heuristic misread as a declaration): the span still runs to the next
+    # declaration, so trim blanks to keep it from claiming an SFC's template.
+    while len(span) > 1 and not span[-1].strip():
+        span.pop()
+
+    current.lines = span
+    current.end_line = current.start_line + len(span) - 1
+    current.analyze()
+
+
 def extract_functions_braces(lines, fpath, language):
     functions = []
     current = None
@@ -200,9 +262,7 @@ def extract_functions_braces(lines, fpath, language):
             m = pattern.match(line)
             if m:
                 if current:
-                    current.end_line = i
-                    current.lines = lines[current.start_line - 1:i]
-                    current.analyze()
+                    _close_function(current, lines, i)
                     functions.append(current)
 
                 name = m.group(1)
@@ -214,17 +274,51 @@ def extract_functions_braces(lines, fpath, language):
                 break
 
     if current:
-        current.end_line = len(lines)
-        current.lines = lines[current.start_line - 1:]
-        current.analyze()
+        _close_function(current, lines, len(lines))
         functions.append(current)
 
     return functions
 
 
+def _close_function_py(current, lines, end_idx):
+    """Finish a Python function at the first line dedented back out of its body.
+
+    Same defect as the brace languages: the span otherwise runs to the next `def`
+    or to EOF, so a 4-line nested helper measured 264 lines — everything up to the
+    next sibling `def`, including its enclosing function's remaining body. Ending
+    at the first non-blank line indented no further than the `def` is Python's
+    actual scope rule, so this is exact rather than heuristic, with one caveat: a
+    multi-line string whose content starts at column 0 reads as a dedent.
+    """
+    stop = end_idx
+    for n in range(current.start_line, end_idx):
+        raw = lines[n]
+        if not raw.strip():
+            continue
+        text = raw.expandtabs(4)
+        if len(text) - len(text.lstrip()) <= current._indent:
+            stop = n
+            break
+
+    span = lines[current.start_line - 1:stop]
+    while len(span) > 1 and not span[-1].strip():
+        span.pop()
+    current.lines = span
+    current.end_line = current.start_line + len(span) - 1
+    current.analyze()
+
+
 def extract_functions_py(lines, fpath):
+    """Every `def`, including nested ones — kept on a stack of open scopes.
+
+    A single `current` slot silently *dropped* an enclosing function the moment a
+    nested `def` appeared: only the innermost helper was ever reported, so a long
+    outer function containing one closure disappeared from the metrics entirely.
+    Since each span's end comes from the dedent scan rather than from where the
+    next `def` happens to sit, parent and child both measure correctly.
+    """
     functions = []
-    current = None
+    stack = []
 
     func_pattern = re.compile(r"^(\s*)(?:async\s+)?def\s+(\w+)\s*\(([^)]*(?:\([^)]*\))*[^)]*)\)")
 
@@ -232,11 +326,10 @@ def extract_functions_py(lines, fpath):
         m = func_pattern.match(line)
         if m:
             indent = len(m.group(1).expandtabs(4))
-            if current and indent <= current._indent:
-                current.end_line = i
-                current.lines = lines[current.start_line - 1:i]
-                current.analyze()
-                functions.append(current)
+            while stack and indent <= stack[-1]._indent:
+                done = stack.pop()
+                _close_function_py(done, lines, i)
+                functions.append(done)
 
             name = m.group(2)
             params = [p.strip().split(":")[0].split("=")[0].strip()
@@ -246,12 +339,12 @@ def extract_functions_py(lines, fpath):
             current = FunctionInfo(name, fpath, i + 1, "py")
             current.param_count = len(params)
             current._indent = indent
+            stack.append(current)
 
-    if current:
-        current.end_line = len(lines)
-        current.lines = lines[current.start_line - 1:]
-        current.analyze()
-        functions.append(current)
+    while stack:
+        done = stack.pop()
+        _close_function_py(done, lines, len(lines))
+        functions.append(done)
 
     return functions
 
