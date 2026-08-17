@@ -23,6 +23,14 @@ a foreign-key-side declaration (`references`, `foreign key`, `belongs_to`,
 `ManyToOne`) makes the enclosing block the *child*; an association-side one
 (`has_many`, `OneToMany`, `relationship`) makes it the *parent*.
 
+Two details that sound minor and are not. **A name is matched across case and one
+plural `s`** (`same_table`), because an association-side declaration names its
+target the way the language does — Rails pairs `class Comment` with `has_many
+:comments`, and without the fold the direction rule above is unreachable for every
+Rails model. And **whole-line comments are skipped**, because a codebase that
+documents its cascades in prose otherwise gets an edge per sentence: a subscriber,
+a processor and a test case all appeared in one map as parent tables.
+
 Reported as-is, deliberately:
   - lines whose two ends could not be resolved (printed raw — a recall failure you
     can see beats one you cannot),
@@ -59,6 +67,18 @@ CASCADE_DELETE = re.compile(
 DECLARATION = re.compile(
     r"^\s*(?:(?:final|abstract|public|private|internal|export|default)\s+)*"
     r"(?:class|interface|trait|enum|struct|function|def|func)\b", re.I)
+
+# Prose about a cascade is not a cascade. Well-commented codebases explain their
+# cascades in exactly these words — "// LoadBalancerOrigin.origin_server_id is ON
+# DELETE CASCADE — deleting…" — and each such line produced an edge out of whatever
+# class enclosed it, so a subscriber, a processor and a test case all appeared in
+# the map as parent tables. Only whole-line comments are skipped: a trailing comment
+# sits on a line whose code is the declaration anyway.
+# `#(?!\[)` because a PHP 8 attribute opens with `#[`, and that is exactly how
+# Doctrine declares a cascade: `#[ORM\OneToMany(..., cascade: ['remove'])]`.
+# Treating those as comments silently deleted every association-side edge in a
+# Symfony codebase — 12 of them — while the map still looked plausible.
+COMMENT_LINE = re.compile(r"^\s*(?://|#(?!\[)|--|\*/?|/\*)")
 
 TABLE_BLOCK = re.compile(
     r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`\"\[]?(\w+)"
@@ -103,8 +123,40 @@ def norm(name):
     return name.replace('_', '').lower()
 
 
-def main():
-    root = sys.argv[1] if len(sys.argv) > 1 else '.'
+def same_table(a, b):
+    """Whether two spellings name one table.
+
+    `norm` folds case and underscores; one trailing `s` on either side covers the
+    singular-class / plural-association split that an association-side declaration
+    depends on. Rails writes `class Comment` and then `has_many :comments`, so
+    without this the direction rule below is unreachable for every Rails model and
+    the declaration lands in `unresolved`. Stemming further would start merging
+    tables that are genuinely different, which is why `norm` itself refuses to.
+    """
+    a, b = norm(a), norm(b)
+    return a == b or a == b + 's' or a + 's' == b
+
+
+def loose_name(text, names, block):
+    """A collected model name that some identifier on `text` refers to.
+
+    Tried only after an exact word match fails, so a schema that spells its
+    relations exactly is never subject to the looser comparison.
+    """
+    for token in re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        for name in names:
+            if name != block and same_table(name, token):
+                return name
+    return None
+
+
+def analyze(root):
+    """Resolve every cascade declaration under `root` into a parent -> child graph.
+
+    Returns (edges, display, where, kinds, unresolved, deletes, file_count). Separated from
+    the printing below so the resolvers can be tested against known schemas
+    instead of by eyeballing a report — see tests/test_check_cascades.py.
+    """
     files = [f for f in iter_source_files(root, EXTS)]
 
     # Pass 1: collect names, so the ORM resolver has a vocabulary to match against.
@@ -130,7 +182,8 @@ def main():
         for i, text in enumerate(lines, 1):
             if DESTROY.search(text) and not schemaish(rel):
                 deletes.append((rel, i, text.strip()[:110]))
-            if not CASCADE_DELETE.search(text) or DECLARATION.match(text):
+            if (not CASCADE_DELETE.search(text) or DECLARATION.match(text)
+                    or COMMENT_LINE.match(text)):
                 continue
 
             block = None
@@ -143,6 +196,8 @@ def main():
             ref = REFERENCES.search(text)
             other = ref.group(1) if ref else next(
                 (n for n in names if n != block and re.search(rf"\b{re.escape(n)}\b", text)), None)
+            if other is None and not ref:
+                other = loose_name(text, names, block)
 
             if block and other:
                 # FK side: the block declaring the column is the child. Association
@@ -164,18 +219,27 @@ def main():
             else:
                 unresolved.append((rel, i, text.strip()[:120]))
 
-    def closure(start):
-        seen, stack = set(), [start]
-        while stack:
-            for child in edges.get(stack.pop(), ()):
-                if child not in seen:
-                    seen.add(child)
-                    stack.append(child)
-        return seen
+    return edges, display, where, kinds, unresolved, deletes, len(contents)
+
+
+def closure(edges, start):
+    """Every table reachable from `start` — the blast radius of deleting one row."""
+    seen, stack = set(), [start]
+    while stack:
+        for child in edges.get(stack.pop(), ()):
+            if child not in seen:
+                seen.add(child)
+                stack.append(child)
+    return seen
+
+
+def main():
+    root = sys.argv[1] if len(sys.argv) > 1 else '.'
+    edges, display, where, kinds, unresolved, deletes, file_count = analyze(root)
 
     total = sum(len(v) for v in edges.values())
     print(f"CASCADE MAP — {total} delete-cascade edge(s) across {len(edges)} parent table(s), "
-          f"from {len(contents)} files")
+          f"from {file_count} files")
     print("Every edge may be intended. This is a map to review, not a list of findings.\n")
 
     if not total:
@@ -191,8 +255,8 @@ def main():
     def shown(name):
         return display.get(name, name)
 
-    for parent in sorted(edges, key=lambda p: (-len(closure(p)), p)):
-        full, direct = closure(parent), edges[parent]
+    for parent in sorted(edges, key=lambda p: (-len(closure(edges, p)), p)):
+        full, direct = closure(edges, parent), edges[parent]
         indirect = sorted(shown(c) for c in full - direct)
         print(f"  {shown(parent)}  ->  {len(full)} table(s)")
         for child in sorted(direct):

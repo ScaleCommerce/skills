@@ -48,7 +48,7 @@ for t in tests/test_*.py; do python3 "$t"; done   # all of them, as CI does
 
 **Add a case whenever a review has to debunk something the tooling said.** That is the signal the numbers are not trustworthy, and it is how `find_complexity.py` came to report a 16-line function as 444 lines for as long as it did — the wrongness was visible in every report and nothing captured it.
 
-`check_cascades.py` still has no fixtures; its resolvers were verified by hand against four repos, which is not repeatable. That is the next gap to close.
+Writing fixtures is also how you find out what a script actually does. `check_cascades.py` had been verified by hand against four repos and looked correct; pinning it down surfaced three things in an afternoon — Rails associations never resolved at all (the singular class never matched the plural association), prose in comments produced an edge per sentence, and the fix for that broke every Doctrine cascade at once because a PHP 8 attribute opens with `#`. Each is now a case in `tests/test_check_cascades.py`, including the two-line regression that a hand check had no way to catch.
 
 **CI conventions the workflow depends on:** a script named `check_*`, `find_*` or `scan_*` takes a repo path as `argv[1]` and prints a report, so CI can point it at this repo to prove it runs. Scripts with their own argument shape (`nb.py`'s subcommands, `contrast.py`'s colour pairs) must not use those prefixes, or CI will invoke them wrongly.
 
