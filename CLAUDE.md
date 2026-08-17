@@ -26,9 +26,31 @@ skills/
 │   └── scripts/                — Drift scanner (scan_ui_drift.py), WCAG contrast checker (contrast.py)
 └── update-claude-md/
     └── SKILL.md                — Structured CLAUDE.md creation & maintenance
+
+tests/                          — Fixtures for the bundled scripts (see Testing the Scripts)
+.github/workflows/tests.yml     — Runs those fixtures, plus every scanner, on push
 ```
 
 Each skill is a single `SKILL.md` file with YAML frontmatter (`name`, `description`) followed by markdown instructions.
+
+## Testing the Scripts
+
+`tests/` holds plain python scripts that exit non-zero on failure — no runner, no dependencies, nothing to install:
+
+```bash
+python3 tests/test_find_complexity.py    # one file
+for t in tests/test_*.py; do python3 "$t"; done   # all of them, as CI does
+```
+
+**It sits outside `skills/` deliberately.** Everything under a skill folder is packaged and installed by `npx skills add`, and end users have no reason to carry test files — `evals/` escapes that only because the packager excludes it by name.
+
+**What belongs here is a script's *output*, not a skill's prose.** A skill is instructions to a model and gets measured by running it (see Evaluating Skill Changes); a script has right answers and gets measured by asserting them. `test_find_complexity.py` is the model to copy: each case is a number that script actually got wrong, with the real answer verified by reading the file, and a comment saying what the wrong number was. Fixtures are inline strings so they never depend on a codebase that might change under them.
+
+**Add a case whenever a review has to debunk something the tooling said.** That is the signal the numbers are not trustworthy, and it is how `find_complexity.py` came to report a 16-line function as 444 lines for as long as it did — the wrongness was visible in every report and nothing captured it.
+
+`check_cascades.py` still has no fixtures; its resolvers were verified by hand against four repos, which is not repeatable. That is the next gap to close.
+
+**CI conventions the workflow depends on:** a script named `check_*`, `find_*` or `scan_*` takes a repo path as `argv[1]` and prints a report, so CI can point it at this repo to prove it runs. Scripts with their own argument shape (`nb.py`'s subcommands, `contrast.py`'s colour pairs) must not use those prefixes, or CI will invoke them wrongly.
 
 ## Adding a New Skill
 
@@ -93,7 +115,7 @@ Two more things worth knowing before you spend the tokens:
 - **Ask agents to return findings as text, not to write report files** — the Write tool refuses agent-authored reports, and eight runs each discovered that the hard way. Extract their final message from the transcript instead.
 - **Prompts that cap the output ("the 5 most serious problems") manufacture displacement**, since a new finding must push another out. Leave the count open when the question is whether a change *adds* anything.
 
-A bundled script is different: it has a right answer, so it gets fixtures instead of eval runs. `code-review/scripts/test_find_complexity.py` holds the measurements that were once wrong (`python3 test_find_complexity.py`) — run it after touching that script, and add a case whenever a review has to debunk a number the tooling produced.
+A bundled script is different: it has a right answer, so it gets fixtures rather than eval runs — see Testing the Scripts.
 
 ### Skills Forked from Upstream
 

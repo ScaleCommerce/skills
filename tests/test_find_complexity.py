@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Regression fixtures for function-span measurement. Run: python3 test_find_complexity.py
+"""Regression fixtures for code-review/scripts/find_complexity.py span measurement.
+
+Run: python3 tests/test_find_complexity.py
 
 Every case here is a wrong number this script actually reported. The span heuristic
 used to end a function at the next *declaration*, which meant a function followed by
@@ -8,12 +10,15 @@ code — absorbed all of it. A reviewer then has to debunk the tool, and one did
 `handleKeydown()` was reported at 444 lines when it is 16.
 
 Fixtures are inline so this stays runnable anywhere, with no dependency on the
-codebases where the numbers were first found wrong.
+codebases where the numbers were first found wrong. It sits outside `skills/` on
+purpose: everything under a skill folder is packaged by `npx skills add`, and end
+users have no reason to install a test file.
 """
 import sys
 import os
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(REPO, "skills", "code-review", "scripts"))
 import find_complexity as fc  # noqa: E402
 
 FAILURES = []

@@ -13,7 +13,8 @@ Known limitations: a nested function still splits its parent's span in brace
 languages (Python keeps both); an unbalanced delimiter inside a block comment
 misleads the scan; a Python multi-line string starting at column 0 reads as a
 dedent. Numbers are indicative — treat flagged functions as candidates to read,
-not as precise metrics. `test_find_complexity.py` holds the fixtures.
+not as precise metrics. The fixtures pinning all of the above live in the repo
+root's `tests/test_find_complexity.py`, outside this packaged skill folder.
 """
 import os
 import re

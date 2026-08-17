@@ -100,6 +100,10 @@ skills/
 │   └── SKILL.md
 └── your-new-skill/
     └── SKILL.md
+
+tests/                  # Fixtures for the bundled scripts, run by CI on push
 ```
 
 See the [Skills documentation](https://github.com/vercel-labs/skills) for the SKILL.md format.
+
+A skill is prose for a model, so it is judged by running it. A bundled script has right answers, so it gets fixtures: `python3 tests/test_find_complexity.py`. They live outside `skills/` because everything inside a skill folder is installed on users' machines. `CLAUDE.md` has the details, including the naming convention CI relies on (`check_*` / `find_*` / `scan_*` take a repo path).

@@ -1,0 +1,64 @@
+name: tests
+
+# The bundled scripts are the only part of this repo with right answers, so they
+# are the only part that can be tested. Everything under tests/ is a plain python
+# script that exits non-zero on failure — no runner, no dependencies.
+on:
+  push:
+  pull_request:
+
+# Read-only, no secrets: which is also why the actions below are pinned to tags
+# rather than commit SHAs. The code-review skill flags mutable tags as a supply
+# chain finding, and rightly — but its own severity rubric asks what an attacker
+# actually gets, and here a compromised action gets a checkout of a public repo
+# and nothing else. Pin to SHAs if this job ever gains write permission, a token,
+# or a publish step.
+permissions:
+  contents: read
+
+jobs:
+  script-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run script fixtures
+        run: |
+          shopt -s nullglob
+          tests=(tests/test_*.py)
+          if [ ${#tests[@]} -eq 0 ]; then
+            echo "no fixtures found under tests/ — did a file get moved?"
+            exit 1
+          fi
+          status=0
+          for t in "${tests[@]}"; do
+            echo "== $t"
+            python3 "$t" || status=1
+          done
+          exit $status
+
+      - name: Every python file compiles
+        # Catches the failure no fixture can: a syntax error in a script the
+        # fixtures don't import. Cheap, and makes no assumption about how a script
+        # is invoked.
+        run: python3 -m compileall -q skills tests
+
+      - name: Scanners run against a real codebase
+        # `check_*`, `find_*` and `scan_*` take a repo path and print a report —
+        # this repo is a fine subject, having python, markdown and a git history.
+        # Scripts outside that naming convention are not scanners and take their
+        # own arguments (nano-banana's `nb.py` has subcommands, ui-overhaul's
+        # `contrast.py` takes colours), so pointing them at a directory only
+        # proves they reject bad input.
+        run: |
+          shopt -s nullglob
+          status=0
+          for s in skills/*/scripts/check_*.py skills/*/scripts/find_*.py skills/*/scripts/scan_*.py; do
+            echo "== $s"
+            python3 "$s" . > /dev/null || { echo "FAILED: $s"; status=1; }
+          done
+          exit $status
