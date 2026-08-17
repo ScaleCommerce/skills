@@ -21,6 +21,12 @@ for the kinds of drift that accumulate in a Tailwind codebase:
      a component spelled twice, very often the UI library's own button.
   8. Controls styled for the mouse only (a hover, no focus) and controls with no
      state at all — the absence that check 6 structurally cannot see.
+  9. Wrappers reached past — a shared primitive that re-presents a library
+     component, next to the count of files using that component raw. The
+     denominator the adoption list cannot supply: "2 call sites" is a lead,
+     "2 adopted against 6 hand-rolled" is a finding.
+ 10. Repeated library composites — the same run of library components with the
+     same salient props, in two or more files. One composite spelled twice.
 
 Counts are signal, not verdicts: read the flagged sites before acting on them.
 
@@ -36,6 +42,17 @@ dozen hand-rolled copies of its own button component, because each individual
 utility in them is already correct. Check 8 is the same blind spot from the
 other side: check 6 counts who fought the focus rule and reports 0 for an app
 where nothing reached it in the first place.
+
+Checks 9-10 follow duplication one rung further, to where it hides in a codebase
+that uses a component library: not values, not native elements, but *library
+calls*. A dialog assembled from the library's own modal with an overridden
+content slot, and a footer built from two correct library buttons, are made
+entirely of legitimate parts — so 1-8 pass while N files reproduce one thing.
+Both need to tell the project's components from the library's, which needs no
+list of libraries: a tag that resolves to a file in this repo is the project's,
+and one that does not is a dependency's. Where the files say so with imports,
+those win, because that is the only evidence separating a wrapper from the
+base it wraps when both are called `Dialog`.
 
 Usage:  python3 scan_ui_drift.py [path] [--json]
 """
@@ -144,6 +161,62 @@ OWN_FOCUS = re.compile(r'\bfocus(?:-visible|-within)?:(?:border|ring|outline|sha
 PRIMITIVE_DIRS = {'ui', 'primitives', 'common', 'shared', 'base', 'core', 'elements'}
 COMPONENT_EXT = {'.vue', '.jsx', '.tsx', '.svelte'}
 
+# ── Internal vs external components ────────────────────────────────────────────
+# The framework question, answered without knowing the framework: a PascalCase tag
+# that resolves to a file in this repo is the project's own; one that does not is
+# the library's (or a global registration). That single distinction is what the two
+# checks below are built on, and it needs no list of library prefixes — it reads
+# the same on Vue, React and Svelte, and does not drift when a dependency is
+# upgraded.
+#
+# The `<` must not be preceded by an identifier character, or TypeScript generics
+# read as components: `Array<HTMLElement>` and `ref<HTMLInputElement>` both match a
+# naive `<([A-Z]\w*)`, and on a .tsx codebase they outnumber the real tags. Two or
+# more characters for the same reason, against `<T,>(…)` arrow generics.
+COMPONENT_TAG = re.compile(r'(?<![A-Za-z0-9_$])<([A-Z][A-Za-z0-9_]+)')
+
+# Where a file resolving a tag by *import* says it came from — needed because the
+# filename fallback cannot decide the case that matters most on a JSX codebase:
+# `import { Dialog } from './ui/Dialog'` and `import { Dialog } from '@radix-ui/…'`
+# produce the identical tag, and one is the project's wrapper while the other is the
+# thing it wraps. That is per file, not per project, which is exactly where the
+# ambiguity sits. A specifier starting with `.`, `~`, `#` or `@/` is this repo;
+# anything else is a package.
+IMPORT_LINE = re.compile(
+    r'import\s+(?:type\s+)?(?:\{([^}]*)\}|([A-Za-z_$][\w$]*))[^\n;]*?'
+    r'from\s+[\'"]([^\'"]+)[\'"]')
+LOCAL_SPECIFIER = re.compile(r'^(?:\.|~|#|@/)')
+VUE_TEMPLATE = re.compile(r'<template>([\s\S]*)</template>')
+# The first element a component renders: what the component *is*, rather than what
+# it contains. Comments are already blanked to whitespace when this runs, so `\s*`
+# steps over a file whose prose opens above its markup.
+#
+# Two spellings, because the root is the one thing here that is not uniform across
+# frameworks: a single-file component declares it in `<template>`, and a JSX one
+# returns it. The JSX form takes the first `return <Tag`, which is a heuristic — a
+# component that returns a fragment, or picks its root behind a conditional, simply
+# does not register one, and the check below skips it rather than guessing.
+TEMPLATE_ROOT = re.compile(r'<template>\s*<([A-Za-z][\w-]*)')
+JSX_ROOT = re.compile(r'\breturn\s*\(?\s*<([A-Z][A-Za-z0-9_]+)')
+
+# ── Library composites ─────────────────────────────────────────────────────────
+# One rung above control geometry, and invisible to it. A `<Button variant="ghost">`
+# beside a `<Button color="error" icon="trash">` is two *correct* library calls, so
+# every value check and the native-control check pass — while N files reproduce the
+# same composite by hand. Adoption (below) only sees primitives that already
+# exist; this sees the ones that were never extracted.
+#
+# Salient props only. Every prop would make each site unique and the check would
+# report nothing; these are the ones that carry a composite's shape.
+SALIENT_PROP = re.compile(r'\b(?:icon|variant|color|size|type|tone)="([^"]+)"')
+OPEN_TAG = re.compile(
+    r'(?<![A-Za-z0-9_$])<([A-Z][A-Za-z0-9_]+)((?:[^>"]|"[^"]*")*?)/?>', re.S)
+# A run ends at the first tag that is not an external component, or at a gap this
+# wide. Proximity is a heuristic for "siblings in one row" that costs nothing and
+# does not need a parser; it was tuned on real output — wider merges unrelated
+# neighbours, narrower splits a row whose buttons carry long class attributes.
+COMPOSITE_GAP = 400
+
 
 def component_tags(rel_path: str):
     """The tag names a component file might be referenced by.
@@ -200,8 +273,12 @@ def main() -> None:
     control_geom = defaultdict(lambda: defaultdict(list))  # signature -> file -> [lines]
     mouse_only = []             # (file, line_no, tag) — hover declared, focus not
     stateless = []              # (file, line_no, tag) — neither declared
-    component_files = []        # rel paths that define a component
+    component_files = []        # rel paths that define a shared primitive
     tags_used = {}              # file -> {PascalCase tags it references}
+    internal_tags = {}          # tag -> the file that defines it (any component)
+    imported = {}               # file -> {tag: the specifier it was imported from}
+    template_root = {}          # file -> its template's first element
+    composite_runs = []        # (file, [(tag, props, offset)]) — split after the walk
     files_scanned = 0
 
     for path, is_markup in walk(root):
@@ -242,10 +319,48 @@ def main() -> None:
                 focus_optouts.append((rel, i, m.group(1) or m.group(2) or m.group(3)))
 
         if is_markup:
-            tags_used[rel] = set(re.findall(r'<([A-Z][A-Za-z0-9_]*)', text))
+            # Markup only. A `<template>` block, where there is one, keeps a string
+            # or a type annotation in the script half out of the tag census.
+            tpl = VUE_TEMPLATE.search(text)
+            markup = tpl.group(1) if tpl else text
+
+            tags_used[rel] = set(COMPONENT_TAG.findall(markup))
+
+            # `import { X as Y }` binds Y, so the alias is the tag to record.
+            origins = {}
+            for named, default, specifier in IMPORT_LINE.findall(text):
+                bindings = [default] if default else [
+                    part.split(' as ')[-1].strip()
+                    for part in named.split(',')]
+                for name in bindings:
+                    if name[:1].isupper():
+                        origins[name] = specifier
+            if origins:
+                imported[rel] = origins
             segments = set(os.path.dirname(rel).replace('\\', '/').split('/'))
-            if os.path.splitext(rel)[1] in COMPONENT_EXT and (segments & PRIMITIVE_DIRS):
-                component_files.append(rel)
+            if os.path.splitext(rel)[1] in COMPONENT_EXT:
+                # Every component contributes its tags, so "not defined here" can
+                # mean "external". Only primitive-dir files go on the adoption list.
+                for name in component_tags(rel):
+                    internal_tags.setdefault(name, rel)
+                if segments & PRIMITIVE_DIRS:
+                    component_files.append(rel)
+                    root_tag = TEMPLATE_ROOT.search(text) or JSX_ROOT.search(text)
+                    if root_tag:
+                        template_root[rel] = root_tag.group(1)
+
+            # Runs of adjacent external components, for the composite check. The
+            # internal/external split is not known until every file has been read,
+            # so the tags are banked here and grouped after the walk.
+            run = []
+            for m in OPEN_TAG.finditer(markup):
+                props = tuple(sorted(SALIENT_PROP.findall(m.group(2))))
+                if run and m.start() - run[-1][2] > COMPOSITE_GAP:
+                    composite_runs.append((rel, run))
+                    run = []
+                run.append((m.group(1), props, m.start()))
+            if run:
+                composite_runs.append((rel, run))
 
         # Native interactive elements, whole-tag rather than per line: an opening
         # tag wraps across lines as often as not, and both checks below need the
@@ -288,11 +403,148 @@ def main() -> None:
     shared_arbitrary = {u: files for u, files in arbitrary.items() if len(files) > 1}
     shared_geom = {s: files for s, files in control_geom.items() if len(files) > 1}
 
+    def from_package(specifier) -> bool:
+        """An import that came from a dependency rather than from this repo."""
+        return specifier is not None and not LOCAL_SPECIFIER.match(specifier)
+
+    def consumes(f: str, names: set) -> bool:
+        """Whether `f` uses one of these tags *and means this repo's version of it*.
+
+        The import check matters for the same reason it does below: a file rendering
+        `<Dialog>` from a package is not a consumer of the project's `ui/Dialog`,
+        and counting it as one inflates adoption exactly where the wrapper is being
+        bypassed — the one number that should have fallen.
+        """
+        origins = imported.get(f, {})
+        return any(not from_package(origins.get(tag))
+                   for tag in tags_used[f] & names)
+
     adoption = {}
     for comp in component_files:
         names = component_tags(comp)
         adoption[comp] = sum(
-            1 for f, used in tags_used.items() if f != comp and (used & names))
+            1 for f in tags_used if f != comp and consumes(f, names))
+
+    # Which tags came from outside the repo, and where each is used directly.
+    #
+    # An explicit import in the using file wins, because it is the only evidence that
+    # separates a same-named wrapper from its base. Where there is none — a Vue SFC
+    # relying on auto-imports — resolution falls back to "does a file in this repo
+    # define this tag", which is unambiguous there precisely because the auto-import
+    # naming keeps the two names apart (`UiModal` against the library's `UModal`).
+    external = defaultdict(set)
+    for f, used in tags_used.items():
+        origins = imported.get(f, {})
+        for tag in used:
+            specifier = origins.get(tag)
+            if from_package(specifier) or (
+                    specifier is None and tag not in internal_tags):
+                external[tag].add(f)
+
+    # Files that both import from a module and render what they imported — the
+    # module-level view of the same data, for the aliasing case below.
+    specifier_users = defaultdict(set)
+    for f, origins in imported.items():
+        for tag, specifier in origins.items():
+            if from_package(specifier) and tag in tags_used.get(f, ()):
+                specifier_users[specifier].add(f)
+
+    # ── Wrappers reached past ───────────────────────────────────────────────────
+    # A shared primitive whose template *root* is an external component exists to
+    # re-present that component. If the raw base is still used in more files than
+    # the wrapper is, the consolidation was built and not finished.
+    #
+    # Root, not "mentions somewhere": a save bar is *built from* the library's
+    # buttons and is not a button wrapper, and matching on the name instead ("does
+    # anything end in Button") reported three feature components as wrappers for
+    # every real one.
+    #
+    # Root alone is not enough either, and the two conditions fail differently. A
+    # primitive that happens to *open* with a generic component — a settings button
+    # whose outermost element is a tooltip, a status dot whose outermost element is
+    # an icon — reads as wrapping something used hundreds of times for unrelated
+    # purposes. Measured on a real codebase, root alone gave two such for every true
+    # hit, and no ratio separates them: the true case ran 6 raw against 2 adopted
+    # while the false ones ran 44-against-7 and 20-against-2.
+    #
+    # So the name has to agree with the root. `ui/Modal.vue` rooted at `<UModal>`
+    # passes; `ui/SettingsButton.vue` rooted at `<UTooltip>` does not. Either name
+    # may be the longer one, so a library prefix (`UModal`, `MuiDialog`) and a local
+    # one (`BaseModal`) both work without a list of prefixes.
+    #
+    # **What this deliberately misses:** a wrapper renamed away from its base —
+    # `ui/Dialog.vue` around `<UModal>`. Better to admit the gap than to report two
+    # false positives for every finding; the adoption list above still shows such a
+    # wrapper as barely-called, which is the same lead by a longer route.
+    # A JSX wrapper usually cannot keep the base's name — `Dialog` wrapping `Dialog`
+    # shadows it — so it aliases (`Dialog as Base`, `* as DialogPrimitive`) and the
+    # root tag stops resembling the file. The import it came from still does, so the
+    # specifier is checked too: `@radix-ui/react-dialog` agrees with `ui/Dialog.tsx`
+    # where the tag `Base` cannot. SFC codebases have no import to read and rely on
+    # the tag, which is the case that already works there.
+    def names_agree(base_tag: str, primitive_path: str) -> bool:
+        stem = os.path.splitext(os.path.basename(primitive_path))[0].lower()
+        if len(stem) < 4:
+            return False
+        base_l = base_tag.lower()
+        if len(base_l) >= 4 and (base_l.endswith(stem) or stem.endswith(base_l)):
+            return True
+        specifier = imported.get(primitive_path, {}).get(base_tag, '')
+
+        return stem in specifier.lower()
+
+    reached_past = []
+    for comp in component_files:
+        base = template_root.get(comp)
+        if not base or base in internal_tags or not base[:1].isupper():
+            continue
+        if not names_agree(base, comp):
+            continue
+        # Where the base was imported, the *module* is its identity rather than the
+        # tag: `Dialog as Base` here and a plain `Dialog` two files over are the same
+        # component under two local names, and counting tags would score that as
+        # zero raw uses. Falls back to the tag for auto-imported SFCs, which have no
+        # specifier to compare and no aliasing to confuse it.
+        specifier = imported.get(comp, {}).get(base)
+        raw_elsewhere = sorted(
+            (specifier_users.get(specifier, set()) if specifier
+             else external.get(base, set())) - {comp})
+        if len(raw_elsewhere) > adoption.get(comp, 0):
+            reached_past.append({
+                'primitive': comp, 'base': base, 'from': specifier,
+                'consumers': adoption.get(comp, 0),
+                'raw_elsewhere': raw_elsewhere,
+            })
+    reached_past.sort(key=lambda r: -len(r['raw_elsewhere']))
+
+    # ── Library composites ─────────────────────────────────────────────────────
+    # Each banked run is split at every tag the repo defines — a project component
+    # between two library ones is a boundary, not a member — then kept only if it is
+    # specific enough to mean something.
+    #
+    # Specific means: at least one member carries a salient prop, *and* either every
+    # member does or there are three or more. Without the first clause, runs of bare
+    # `<Icon>`s dominate — three adjacent icons is the most common shape in any
+    # codebase and says nothing about duplication. Measured on a real repo, adding it
+    # took the report from five findings (two real) to two (both real), on the same
+    # tree, before and after the consolidation it was checking.
+    def specific(group):
+        props = [p for _, p, _ in group]
+        return len(group) >= 2 and any(props) and (all(props) or len(group) >= 3)
+
+    composites = defaultdict(lambda: defaultdict(int))
+    for rel, run in composite_runs:
+        group = []
+        for item in run + [None]:
+            if item is None or item[0] in internal_tags:
+                if specific(group):
+                    sig = ' + '.join(
+                        f'{t}[{",".join(p)}]' for t, p, _ in group)
+                    composites[sig][rel] += 1
+                group = []
+            else:
+                group.append(item)
+    shared_composites = {s: f for s, f in composites.items() if len(f) > 1}
 
     if as_json:
         print(json.dumps({
@@ -327,6 +579,12 @@ def main() -> None:
             'stateless_controls': [
                 {'file': f, 'line': l, 'tag': t} for f, l, t in stateless],
             'component_adoption': dict(sorted(adoption.items(), key=lambda x: x[1])),
+            'external_components': {
+                t: sorted(fs) for t, fs in
+                sorted(external.items(), key=lambda x: -len(x[1]))},
+            'wrappers_reached_past': reached_past,
+            'shared_library_composites': {
+                s: dict(files) for s, files in shared_composites.items()},
         }, indent=2))
         return
 
@@ -489,6 +747,52 @@ def main() -> None:
     print('rebuilds is a migration that never happened, and Phase 3 owes it.')
     for n, f in low:
         print(f'  {n:4}  {f}')
+
+    print()
+    print(f'WRAPPERS REACHED PAST: {len(reached_past)}')
+    print('The number the adoption list above cannot give you: not "how few call')
+    print('this primitive" but "how many reach around it to the thing it wraps".')
+    print('Read as a pair, 2 adopted against 6 hand-rolled is a finding; 2 on its')
+    print('own is only a lead. A primitive counts here when its template *root* is')
+    print('a component from outside the repo — that is what makes it a re-presenting')
+    print('of that component rather than something merely built from it.')
+    print('A generic base (an icon, a button) can appear with a large raw count and')
+    print('mean nothing: the question is whether the wrapper was meant to replace')
+    print('direct use of it, or just happens to start with one.')
+    for r in reached_past:
+        # Name it by its module where there is one: the local alias a wrapper gave
+        # it (`Base`) is not what the other files call it.
+        base = f'{r["from"]}' if r['from'] else f'<{r["base"]}>'
+        n, c = len(r['raw_elsewhere']), r['consumers']
+        print(f'  {base} used raw in {n} file{"" if n == 1 else "s"}, while '
+              f'{r["primitive"]} wraps it and has '
+              f'{c} consumer{"" if c == 1 else "s"}')
+        for f in r['raw_elsewhere'][:6]:
+            print(f'        {f}')
+        if len(r['raw_elsewhere']) > 6:
+            print(f'        … and {len(r["raw_elsewhere"]) - 6} more')
+    if not reached_past:
+        print('  (none — every wrapper is used more than its base is used raw)')
+
+    print()
+    composite_sites = sum(sum(f.values()) for f in shared_composites.values())
+    print(f'REPEATED LIBRARY COMPOSITES: {len(shared_composites)} in 2+ files '
+          f'({composite_sites} sites, {len(composites)} distinct)')
+    print('The rung above control geometry. Two library components side by side with')
+    print('the same salient props, in two files, is one composite spelled twice —')
+    print('and it passes every check above because each part is a correct library')
+    print('call. This is where an action row, a confirmation pair or a field-with-')
+    print('button lives before anybody names it.')
+    print('Grouped by proximity rather than by parsing the tree, so read the sites:')
+    print('adjacent is a guess at "siblings in one row" and it is sometimes wrong.')
+    for s, files in sorted(shared_composites.items(),
+                           key=lambda x: (-len(x[1]), x[0])):
+        print(f'  {len(files)} files  {s[:120]}')
+        for f in sorted(files)[:4]:
+            print(f'        {f}')
+        if len(files) > 4:
+            print(f'        … and {len(files) - 4} more files')
+    print(f'  ({len(composites) - len(shared_composites)} one-off composites not listed)')
 
     print()
     print('=' * 72)
