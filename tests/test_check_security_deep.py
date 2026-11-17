@@ -115,6 +115,20 @@ for name in NON_HITS:
     check(f"{base} not reported", not hit(out, base),
           "\n         ".join(l for l in finding_lines(out) if base in l))
 
+print("Backtick shell operator — one line, not Markdown ticks spanning a docblock")
+# Found running the scanner on sulu-scale.sc for brief 282: the pattern
+# `[^`]*\$ crossed newlines, so a docblock's `foo` and the next $var several
+# lines down read as shell execution — 56 high findings, none of them real.
+_, out = scan({
+    "src/Shell.php": php("        $out = `ls -la $dir`;"),
+    "src/Doc.php": php("        /** Moves `old` to its new path. */\n"
+                       "        $io->error('Datei `x` fehlt.');\n"
+                       "        $file = $this->path;"),
+})
+check("`ls -la $dir` reported at src/Shell.php:7", hit(out, "Shell.php:7", "high"), out)
+check("Markdown backticks before a later $var not reported", not hit(out, "Doc.php"),
+      "\n         ".join(l for l in finding_lines(out) if "Doc.php" in l))
+
 # ---------------------------------------------------------------------------
 # Output (brief 282 §2.3–2.4). New behaviour, so these are also red on 6e6d6ba.
 # ---------------------------------------------------------------------------

@@ -288,7 +288,10 @@ INJECTION_PATTERNS_PHP = [
     (r"(?<![\w$])eval\s*\(", "eval() usage — avoid with user input"),
     (r"(?:include|require)(?:_once)?\s*\(\s*\$", "Dynamic include/require — potential LFI/RFI"),
     (r"unserialize\s*\(", "unserialize — unsafe with untrusted data"),
-    (r"shell_exec\s*\(|`[^`]*\$", "Shell execution — potential command injection"),
+    # Backtick operator: opening and closing tick on one line. Spanning lines, it
+    # paired Markdown backticks in docblocks and messages with whatever `$var`
+    # came next — 56 of 56 hits on one Symfony codebase were that.
+    (r"shell_exec\s*\(|`[^`\n]*\$[^`\n]*`", "Shell execution — potential command injection"),
     (r"header\s*\(\s*['\"]Location:\s*['\"]?\s*\.\s*\$_(?:GET|POST|REQUEST)", "User input in redirect — potential open redirect"),
 ]
 
