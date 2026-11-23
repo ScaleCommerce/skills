@@ -2,30 +2,27 @@
 
 A collection of AI coding skills shared across the ScaleCommerce team. These skills give AI coding assistants (Claude Code, Cursor, Copilot, and others) specialized knowledge and workflows that we've refined through real project work — so the AI gets it right the first time instead of guessing.
 
-Skills are installed via [npx skills](https://github.com/vercel-labs/skills) and work across 40+ AI coding agents.
+Skills are plain folders, installed by symlinking them from a clone of this repo. Nothing to install first: no Node, no npx, just git and bash.
 
 ## Installation
 
 ```bash
-# Install all ScaleCommerce skills
-npx skills add scalecommerce/skills
-
-# Install globally (available in all projects)
-npx skills add scalecommerce/skills -g
-
-# Install a specific skill only
-npx skills add scalecommerce/skills -s landing-page-guide
+git clone https://github.com/ScaleCommerce/skills.git ~/work/skills
+~/work/skills/install.sh                    # all skills
+~/work/skills/install.sh landing-page-guide # or only the ones you name
 ```
+
+This links each skill into `~/.agents/skills/` (read by Codex and other agents) and `~/.claude/skills/` (Claude Code), available in all projects. A previous `npx skills` install is moved aside to `~/.agents/skills-backup-<timestamp>/`, not deleted.
+
+Other agents read their own folder: link the skill there too, e.g. `ln -s ~/.agents/skills/code-review ~/.cursor/skills/code-review`.
 
 ## Updating
 
 ```bash
-# Check for updates
-npx skills check
-
-# Pull latest versions
-npx skills update
+~/work/skills/update.sh
 ```
+
+It pulls the repo, lists the skill changes it brought in, and re-runs `install.sh` so added skills get linked and removed ones get unlinked. Because the installed skills are symlinks, a plain `git pull` already updates the existing ones.
 
 ## Skills in this collection
 
@@ -102,6 +99,8 @@ skills/
     └── SKILL.md
 
 tests/                  # Fixtures for the bundled scripts, run by CI on push
+install.sh              # Symlink skills into ~/.agents/skills and ~/.claude/skills
+update.sh               # git pull + install.sh
 ```
 
 See the [Skills documentation](https://github.com/vercel-labs/skills) for the SKILL.md format.

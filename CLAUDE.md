@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What This Repo Is
 
-A collection of AI coding skills for the ScaleCommerce team, installed via [npx skills](https://github.com/vercel-labs/skills). Skills give AI coding assistants specialized knowledge and workflows. They work across 40+ AI agents (Claude Code, Cursor, Copilot, etc.).
+A collection of AI coding skills for the ScaleCommerce team, installed by symlinking them from a clone with `install.sh` (we don't install Node on our machines, so no `npx skills`). Skills give AI coding assistants specialized knowledge and workflows. They work across 40+ AI agents (Claude Code, Cursor, Copilot, etc.).
 
 ## Repository Structure
 
@@ -29,6 +29,8 @@ skills/
 
 tests/                          — Fixtures for the bundled scripts (see Testing the Scripts)
 .github/workflows/tests.yml     — Runs those fixtures, plus every scanner, on push
+install.sh                      — Symlinks skills into ~/.agents/skills and ~/.claude/skills (see Installing)
+update.sh                       — git pull --ff-only, then install.sh
 ```
 
 Each skill is a single `SKILL.md` file with YAML frontmatter (`name`, `description`) followed by markdown instructions.
@@ -42,7 +44,7 @@ python3 tests/test_find_complexity.py    # one file
 for t in tests/test_*.py; do python3 "$t"; done   # all of them, as CI does
 ```
 
-**It sits outside `skills/` deliberately.** Everything under a skill folder is packaged and installed by `npx skills add`, and end users have no reason to carry test files — `evals/` escapes that only because the packager excludes it by name.
+**It sits outside `skills/` deliberately.** Everything under a skill folder is what an agent sees as the skill, since `install.sh` links the whole folder, and end users have no reason to carry test files. `evals/` is the one exception that lives inside a skill: it is small and harmless to agents.
 
 **What belongs here is a script's *output*, not a skill's prose.** A skill is instructions to a model and gets measured by running it (see Evaluating Skill Changes); a script has right answers and gets measured by asserting them. `test_find_complexity.py` is the model to copy: each case is a number that script actually got wrong, with the real answer verified by reading the file, and a comment saying what the wrong number was. Fixtures are inline strings so they never depend on a codebase that might change under them.
 
@@ -67,42 +69,30 @@ description: <trigger description — when should an AI agent activate this skil
 
 The `description` field in frontmatter is critical — it controls when AI agents trigger the skill. Write it as a detailed activation prompt, not a summary.
 
-## Local Development Workflow
+## Installing
 
-To test skills you're editing, install them globally from the local repo path. This symlinks into `~/.claude/skills/` (and other agent dirs under `~/`) so Claude Code picks them up across all projects:
-
-```bash
-# Install/update all skills globally from local repo
-npx skills add . -g --all
-
-# Install/update a specific skill globally
-npx skills add . -g -s <skill-name>
-```
-
-`add` overwrites previous installs, so re-run the same command after switching from the GitHub version to your local checkout. By default skills are symlinked, so edits to your repo are reflected immediately without reinstalling.
-
-## End-User Install Commands
+There is no npx: we don't install Node on our machines. Developers and end users run the same thing:
 
 ```bash
-# Install all skills from GitHub
-npx skills add scalecommerce/skills
-
-# Install globally
-npx skills add scalecommerce/skills -g
-
-# Install a single skill
-npx skills add scalecommerce/skills -s <skill-name>
-
-# Check for updates / pull latest
-npx skills check
-npx skills update
+./install.sh                 # link every skill from this clone
+./install.sh <skill-name>    # link only the named ones
+./update.sh                  # git pull --ff-only, then install.sh
 ```
+
+The layout matches what `npx skills add -g` produced, so agents find skills where they always did:
+
+- `~/.agents/skills/<name>` → `<clone>/skills/<name>` (absolute symlink; Codex and others read here)
+- `~/.claude/skills/<name>` → `../../.agents/skills/<name>` (Claude Code)
+
+A real directory already at either path is an old npx copy. `install.sh` moves it to `~/.agents/skills-backup-<timestamp>/` rather than deleting it. It also removes dangling links that point into this clone, which is what a skill deleted upstream leaves behind after a pull. Re-running it is safe.
+
+**The clone is the install**, so edits in this repo are live in every agent immediately, without reinstalling. Development and installed versions are one and the same file. Re-run `install.sh` only when a skill is added or removed.
 
 ## Updating Skills
 
-When asked to update or improve a skill, always edit the local SKILL.md in this repo — this is the development version. Users will later install it via `npx skills add scalecommerce/skills`. Use the `/skill-creator` skill for creating, modifying, and testing skills.
+When asked to update or improve a skill, always edit the local SKILL.md in this repo — this is the development version. Users get it with their next `update.sh`. Use the `/skill-creator` skill for creating, modifying, and testing skills.
 
-**Note that `~/.agents/skills/<name>/` is a real directory copy, not a symlink to this repo** — so the installed skill an agent actually loads can lag your edits by however long it has been since the last `npx skills add . -g`. Verify which version you are testing (`grep` for a phrase you just wrote) before concluding a change had no effect.
+**Check that `~/.agents/skills/<name>` is a symlink into this repo** (`ls -l`) before concluding a change had no effect. A real directory there is a leftover npx copy that lags your edits; `./install.sh` replaces it.
 
 ### Evaluating Skill Changes
 
