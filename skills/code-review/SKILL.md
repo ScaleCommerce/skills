@@ -11,6 +11,8 @@ Perform a thorough, opinionated code review of a project or set of files. The go
 
 **Be useful, not exhaustive.** A review that lists 200 minor issues is worse than one that identifies the 10 things that actually matter. Prioritize by impact: bugs > security > architecture > maintainability > style.
 
+**Nothing to fix is a result — report it and stop.** Much of the code you review is fine, a small diff especially, and saying so plainly is the review doing its job. The pull the other way is strong: a report with empty sections feels unfinished, so they get filled — a nit promoted one severity level, an observation about code the change never touched, "None." under six headings. Each of those spends the time a clean verdict was supposed to save the reader, and trains them to skim the next report that does contain something. So search as hard as the code deserves, then let the output be exactly as long as what you found. The clearance rule below still holds: "nothing to fix" covers what you read, so say in a line what that was.
+
 **Be specific, not vague.** "This code could be better" helps nobody. "The retry logic in `api/client.ts:34` swallows errors silently — failed requests disappear without logging or propagation" is actionable.
 
 **Show, don't just tell.** When suggesting improvements, include a brief code example of what the fix looks like. Don't rewrite everything — just enough to communicate the pattern.
@@ -304,6 +306,15 @@ When you find something the scripts missed, that's the highest-value part of you
 
 Structure the report by severity, not by file. Group related issues together.
 
+#### Scale the Report to What You Found
+
+The format below is the shape of a full-codebase review that turned up findings in several categories. It is a menu, not a form to complete:
+
+- **Drop every section you have nothing for.** No heading followed by "None." The one exception is an area the user asked about by name — if they asked whether the change is secure, the clearance is the answer, so give it along with what you read to earn it.
+- **A diff review leads with the verdict** — fine to commit, or fix these first — and then the findings about the change, in order of severity. If the change is clean, that is most of the review: the verdict, what you checked, and anything the author should do before committing. A few lines is the right length for a few-line change. Short is for what you did not find, never for what you did: a rule the project wrote down for itself (a changelog convention in CLAUDE.md, a CONTRIBUTING checklist) that the change skips is a finding about the change, however small it looks next to a bug.
+- **Keep what the change did apart from what was already there.** Reading around a diff turns up older problems, and they are worth a short mention — under their own label, after the findings about the change, and never as a reason to hold the commit. Rate the change on what it does: an existing weakness that the diff merely touches is not this commit's Medium.
+- **Don't fill the tail.** If Minor Issues would only hold remarks that nothing needs changing, leave it out. "What's Good" belongs in a full review, where it corrects the all-negative picture; on a clean diff the verdict already says it.
+
 #### Report Format
 
 ```markdown
@@ -357,7 +368,7 @@ When in doubt, ask: "what actually happens, to whom, and how likely is it?" — 
 
 ### Step 6: Present Results
 
-Save the report as a markdown file and present it to the user. If a CODE_REVIEW.md already exists, create a new one with todays date in the name. If the user asked about a specific concern (e.g., "find duplicates"), lead with that section.
+For a full review, save the report as a markdown file and present it to the user. If a CODE_REVIEW.md already exists, create a new one with todays date in the name. A diff review with little to report is an answer, not a document — give it in the conversation and skip the file. If the user asked about a specific concern (e.g., "find duplicates"), lead with that section.
 
 After presenting, offer to:
 1. Deep-dive into any specific issue
