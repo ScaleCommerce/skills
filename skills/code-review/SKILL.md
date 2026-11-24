@@ -124,7 +124,7 @@ python3 <skill-path>/scripts/find_inconsistencies.py
 python3 <skill-path>/scripts/find_complexity.py
 ```
 
-**Security Scan** — secrets detection (cloud/SaaS token formats, entropy-based detection), injection patterns (SQL/XSS/command/template injection, path traversal, SSRF, open redirect, prototype pollution), access control issues (CORS misconfiguration, cookie-based routes without CSRF, disabled TLS verification), weak cryptography, and information disclosure. Respects .gitignore — a properly-ignored local `.env` is not a finding.
+**Security Scan** — secrets detection (cloud/SaaS token formats, entropy-based detection), injection patterns (SQL/XSS/command/template injection, path traversal, SSRF, open redirect, prototype pollution; for PHP also Doctrine DBAL/DQL/QueryBuilder calls whose SQL is built by concatenation, interpolation or `sprintf`, and Twig `|raw`/`autoescape false` summarised per template), access control issues (CORS misconfiguration, cookie-based routes without CSRF, disabled TLS verification), weak cryptography, and information disclosure. Respects .gitignore — a properly-ignored local `.env` is not a finding. It ends by listing which file types it read and how many, and which it could not: an empty result means only that none of its patterns matched, never that the code is secure — and for a file type it lists as not covered, it means nothing at all.
 
 ```bash
 python3 <skill-path>/scripts/check_security_deep.py
@@ -287,6 +287,7 @@ Check for anti-patterns specific to the detected framework:
 **Express/Fastify**: Missing async error handling, middleware order issues, missing input validation, no rate limiting
 **Django/Flask**: N+1 queries, raw SQL without parameterization, missing CSRF protection, debug mode in production settings
 **Go**: Unchecked errors, goroutine leaks, missing context propagation, defer in loops
+**Symfony/Doctrine/Twig**: Read `access_control` in `security.yaml` against the actual routes and controllers, then `#[IsGranted]`/`denyAccessUnlessGranted` per action — and for every `{id}` route parameter, whether the loaded entity is checked against the current user (IDOR). DBAL and DQL take values only as bound parameters; an interpolated table or column name must come from a constant or a whitelist. `|raw` is acceptable only on content whose authors are trusted, so the question for each one is *who can fill that field* — an editor, a customer, an import? Forms built outside the Symfony Form component need their own CSRF token check. `APP_DEBUG` and the profiler must be off in prod. On a CMS built on Symfony (Sulu, Shopware), admin-API permissions and tenant/webspace separation belong to the authorization review too.
 
 #### Beyond the Scripts: What Only You Can Find
 

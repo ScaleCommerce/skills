@@ -23,8 +23,26 @@ SOURCE_EXTS = {
     ".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte",
     ".py", ".go", ".php", ".rb", ".java", ".rs", ".cs",
 }
+# Templates get only the injection (XSS) pass and the secret pass — running the
+# crypto/disclosure patterns over markup would just generate noise.
+TEMPLATE_EXTS = {".twig"}
 CONFIG_EXTS = {".env", ".yaml", ".yml", ".json", ".toml", ".xml", ".ini", ".cfg"}
-ALL_EXTS = SOURCE_EXTS | CONFIG_EXTS
+ALL_EXTS = SOURCE_EXTS | TEMPLATE_EXTS | CONFIG_EXTS
+
+# Which extensions the injection pass has patterns for. Everything else in
+# SOURCE_EXTS is scanned for secrets, crypto and config only — the report says so,
+# because "nothing found" in a Ruby codebase means something different from
+# "nothing found" in a PHP one.
+INJECTION_EXTS = {".ts", ".tsx", ".js", ".jsx", ".vue", ".svelte", ".py", ".go", ".php", ".twig"}
+
+# Code and template files this scanner does not read at all. Present in the repo,
+# they are named in the report as not covered rather than silently passed.
+UNSCANNED_CODE_EXTS = {
+    ".kt", ".kts", ".swift", ".scala", ".c", ".cc", ".cpp", ".h", ".hpp", ".m",
+    ".ex", ".exs", ".erl", ".clj", ".dart", ".lua", ".pl", ".sh", ".bash", ".sql",
+    ".erb", ".haml", ".slim", ".jinja", ".jinja2", ".j2", ".njk", ".hbs",
+    ".mustache", ".ejs", ".pug", ".liquid", ".tpl", ".html", ".htm",
+}
 
 
 def walk_files(extensions=None):
@@ -270,13 +288,145 @@ INJECTION_PATTERNS_PHP = [
     (r"(?<![\w$])eval\s*\(", "eval() usage — avoid with user input"),
     (r"(?:include|require)(?:_once)?\s*\(\s*\$", "Dynamic include/require — potential LFI/RFI"),
     (r"unserialize\s*\(", "unserialize — unsafe with untrusted data"),
-    (r"shell_exec\s*\(|`[^`]*\$", "Shell execution — potential command injection"),
+    # Backtick operator: opening and closing tick on one line. Spanning lines, it
+    # paired Markdown backticks in docblocks and messages with whatever `$var`
+    # came next — 56 of 56 hits on one Symfony codebase were that.
+    (r"shell_exec\s*\(|`[^`\n]*\$[^`\n]*`", "Shell execution — potential command injection"),
     (r"header\s*\(\s*['\"]Location:\s*['\"]?\s*\.\s*\$_(?:GET|POST|REQUEST)", "User input in redirect — potential open redirect"),
 ]
 
 
+# --- PHP: Doctrine DBAL / ORM / QueryBuilder -------------------------------
+# Modern PHP never calls mysql_query; it builds SQL for Doctrine. The question is
+# the same — is the statement assembled from a variable? — but it can only be
+# answered by looking at the *first* argument, because the second one is where
+# the bound parameters live and concatenation there ('%' . $q . '%') is correct.
+# So the call's first argument is cut out with a small tokenizer, not a regex.
+# No data-flow analysis: a request value visible in the argument is high,
+# anything else is medium with the question the reviewer has to answer.
+
+PHP_SQL_CALL = re.compile(
+    r"->\s*(executeQuery|executeStatement|executeUpdate|prepare|fetch\w*"
+    r"|createQuery|createNativeQuery|where|andWhere|orWhere|having|andHaving|orHaving)\s*\(")
+PHP_REQUEST_SOURCE = re.compile(
+    r"\$request\s*->|\$_(?:GET|POST|REQUEST|COOKIE|SERVER)\b"
+    r"|->\s*(?:query|request|attributes|cookies|headers)\s*->\s*(?:get|all)\s*\("
+    r"|->\s*(?:getContent|toArray)\s*\(")
+PHP_INTERPOLATION = re.compile(r"(?<!\\)\{\$|(?<![\\{])\$[A-Za-z_]")
+PHP_CONCAT = re.compile(r"(?<![.\d])\.(?![.\d=])")
+PHP_HEREDOC = re.compile(r"<<<[ \t]*([\"']?)([A-Za-z_]\w*)\1\r?\n")
+
+
+def php_first_arg(content, start):
+    """Segments of the call argument beginning at `start` (just past the '('):
+    a list of (kind, text) with kind in 'code', 'sq' (no interpolation) and 'dq'
+    (double-quoted or heredoc). Stops at the first top-level ',' or ')'."""
+    segs, code, depth, i, n = [], [], 0, start, len(content)
+    while i < n:
+        c = content[i]
+        if c in "'\"":
+            segs.append(("code", "".join(code)))
+            code = []
+            j = i + 1
+            while j < n and content[j] != c:
+                j += 2 if content[j] == "\\" else 1
+            segs.append(("sq" if c == "'" else "dq", content[i + 1:j]))
+            i = j + 1
+            continue
+        if c == "<" and content.startswith("<<<", i):
+            m = PHP_HEREDOC.match(content, i)
+            if m:
+                end = re.compile(r"\n[ \t]*" + m.group(2) + r"\b").search(content, m.end())
+                stop = end.start() if end else n
+                segs.append(("code", "".join(code)))
+                code = []
+                # A nowdoc (<<<'X') never interpolates, like a single-quoted string.
+                segs.append(("sq" if m.group(1) == "'" else "dq", content[m.end():stop]))
+                i = end.end() if end else n
+                continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            if depth == 0:
+                break
+            depth -= 1
+        elif c == "," and depth == 0:
+            break
+        code.append(c)
+        i += 1
+    segs.append(("code", "".join(code)))
+    return segs
+
+
+def php_sql_finding(segs):
+    """(severity, how) if the argument builds SQL from a variable, else None."""
+    code = " ".join(t for k, t in segs if k == "code")
+    dq = " ".join(t for k, t in segs if k == "dq")
+    if PHP_INTERPOLATION.search(dq):
+        how = "interpolation"
+    elif "$" in code and re.search(r"\bv?sprintf\s*\(", code):
+        how = "sprintf"
+    elif "$" in code and PHP_CONCAT.search(code):
+        how = "concatenation"
+    else:
+        return None
+    request = PHP_REQUEST_SOURCE.search(code) or PHP_REQUEST_SOURCE.search(dq)
+    return ("high" if request else "medium"), how
+
+
+def check_php_sql(rel, content, lines):
+    for m in PHP_SQL_CALL.finditer(content):
+        ln, line_text = line_at(content, lines, m.start())
+        if line_text.strip().startswith(("//", "#", "*", "/*")):
+            continue
+        found = php_sql_finding(php_first_arg(content, m.end()))
+        if not found:
+            continue
+        severity, how = found
+        call = m.group(1)
+        if severity == "high":
+            add("high", "injection",
+                f"SQL/DQL built by {how} with a request value in {call}() — use a bound parameter: {rel}:{ln}")
+        else:
+            add("medium", "injection",
+                f"SQL/DQL built by {how} in {call}() — check the variable is a constant or whitelisted "
+                f"(e.g. a table name), never input; values belong in bound parameters: {rel}:{ln}")
+
+
+# --- Twig ------------------------------------------------------------------
+# |raw and autoescape-false switch off Twig's escaping. Whether that is a hole
+# depends on who can write the value, which no pattern can know — so these are
+# medium candidates, summarised per file: a CMS theme can hold hundreds, and one
+# line each would push every other category past the output cap.
+TWIG_COMMENT = re.compile(r"\{#.*?#\}", re.DOTALL)
+TWIG_RAW = re.compile(r"\|\s*raw\b")
+TWIG_AUTOESCAPE_OFF = re.compile(r"\{%-?\s*autoescape\s+false\b")
+
+
+def _lines_list(content, matches, limit=5):
+    nums = [line_num(content, m.start()) for m in matches]
+    shown = ", ".join(str(n) for n in nums[:limit])
+    return shown + (", …" if len(nums) > limit else "")
+
+
+def check_twig(rel, content):
+    # Blank comments out but keep their newlines, so line numbers stay true.
+    content = TWIG_COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group(0)), content)
+    raws = list(TWIG_RAW.finditer(content))
+    offs = list(TWIG_AUTOESCAPE_OFF.finditer(content))
+    if not raws and not offs:
+        return
+    parts = []
+    if raws:
+        parts.append(f"{len(raws)}× |raw (line{'s' if len(raws) > 1 else ''} {_lines_list(content, raws)})")
+    if offs:
+        parts.append(f"{len(offs)}× autoescape false (line{'s' if len(offs) > 1 else ''} {_lines_list(content, offs)})")
+    add("medium", "template-xss",
+        f"Unescaped Twig output — check who can fill these fields: {rel}: {', '.join(parts)}")
+
+
 def check_injections():
-    for fpath, content, lines in walk_files(SOURCE_EXTS):
+    for fpath, content, lines in walk_files(SOURCE_EXTS | TEMPLATE_EXTS):
         rel = os.path.relpath(fpath, root)
         ext = os.path.splitext(fpath)[1]
 
@@ -289,6 +439,10 @@ def check_injections():
             patterns = INJECTION_PATTERNS_GO
         elif ext == ".php":
             patterns = INJECTION_PATTERNS_PHP
+            check_php_sql(rel, content, lines)
+        elif ext == ".twig":
+            check_twig(rel, content)
+            continue
 
         for pattern, label in patterns:
             for m in re.finditer(pattern, content, re.IGNORECASE):
@@ -415,27 +569,60 @@ def main():
     check_crypto()
     check_info_disclosure()
 
-    if not issues:
-        print("No security issues detected.")
-        return
-
+    MAX_SHOWN = 60
     severity_order = {"critical": 0, "high": 1, "medium": 2}
     issues.sort(key=lambda x: (severity_order.get(x[0], 3), x[1]))
 
     current_cat = None
-    for severity, category, msg in issues[:60]:
+    for severity, category, msg in issues[:MAX_SHOWN]:
         if category != current_cat:
             current_cat = category
             print(f"\n=== {category.upper()} ===")
         print(f"  [{severity.upper()}] {msg}")
 
     total = len(issues)
-    critical = sum(1 for s, _, _ in issues if s == "critical")
-    high = sum(1 for s, _, _ in issues if s == "high")
-    print(f"\n{total} security issues found ({critical} critical, {high} high)")
-    if total > 60:
-        print(f"  (showing first 60 of {total})")
+    if total:
+        counts = defaultdict(lambda: defaultdict(int))
+        for severity, category, _ in issues:
+            counts[category][severity] += 1
+        sev = defaultdict(int)
+        for severity, _, _ in issues:
+            sev[severity] += 1
+        print(f"\n{total} findings ({sev['critical']} critical, {sev['high']} high, {sev['medium']} medium)"
+              + (f" — showing the first {MAX_SHOWN}" if total > MAX_SHOWN else ""))
+        print("By category: " + " · ".join(
+            f"{cat}: {sum(c.values())} ("
+            + ", ".join(f"{c[s]} {s}" for s in ("critical", "high", "medium") if c[s]) + ")"
+            for cat, c in sorted(counts.items(), key=lambda kv: -sum(kv[1].values()))))
+    else:
+        print("No pattern matched.")
 
+    print_coverage()
+    print("An empty or short list means none of these patterns matched — not that the code is secure.")
+
+
+def print_coverage():
+    """What was actually read, so a reader can tell 'clean' from 'not looked at'."""
+    scanned, unscanned = defaultdict(int), defaultdict(int)
+    for fpath in iter_source_files(root, None):
+        base = os.path.basename(fpath)
+        ext = os.path.splitext(base)[1]
+        if base == ".env" or base.startswith(".env."):
+            ext = ".env"
+        if ext in ALL_EXTS:
+            scanned[ext] += 1
+        elif ext in UNSCANNED_CODE_EXTS:
+            unscanned[ext] += 1
+
+    def fmt(d):
+        return ", ".join(f"{e}: {n}" for e, n in sorted(d.items(), key=lambda kv: (-kv[1], kv[0])))
+
+    print(f"\nScanned files by type — {fmt(scanned) or 'none'}")
+    no_injection = {e: n for e, n in scanned.items() if e in SOURCE_EXTS and e not in INJECTION_EXTS}
+    if no_injection:
+        print(f"Secrets/crypto/config checks only, no injection patterns — {fmt(no_injection)}")
+    if unscanned:
+        print(f"Present but not covered by this scanner — {fmt(unscanned)}")
 
 if __name__ == "__main__":
     main()
